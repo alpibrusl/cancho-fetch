@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cancho-fetch</title>
+<meta name="description" content="HTTP to a baked list of hosts, with the list in the binary's authority row.">
+<style>
+:root {
+  --bg: #fbfaf8; --fg: #1d1d1b; --muted: #5d5b56; --rule: #e3e0da;
+  --code-bg: #f1eee8; --accent: #3a5a8c; --accent-soft: #e6ecf5; --warn: #8a5a00; --warn-bg: #fbf1dc;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161615; --fg: #e8e6e1; --muted: #a29f97; --rule: #33322f;
+    --code-bg: #22211f; --accent: #8fb0e0; --accent-soft: #1f2a3a; --warn: #e8c070; --warn-bg: #2b2415;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161615; --fg: #e8e6e1; --muted: #a29f97; --rule: #33322f;
+  --code-bg: #22211f; --accent: #8fb0e0; --accent-soft: #1f2a3a; --warn: #e8c070; --warn-bg: #2b2415;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header.site { border-bottom: 1px solid var(--rule); padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline; }
+header.site .home { font-weight: 700; font-family: ui-monospace, monospace; }
+header.site nav { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+header.site nav a { color: var(--muted); text-decoration: none; font-size: 14px; }
+header.site nav a:hover { color: var(--accent); }
+main { max-width: 880px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 34px; line-height: 1.2; margin: 0 0 8px; }
+h2 { font-size: 21px; margin-top: 44px; border-bottom: 1px solid var(--rule); padding-bottom: 4px; }
+a { color: var(--accent); }
+code, pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 14px; }
+code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; overflow-wrap: anywhere; }
+pre { background: var(--code-bg); padding: 14px; overflow-x: auto; border-radius: 4px; }
+pre code { background: none; padding: 0; overflow-wrap: normal; }
+.lede { font-size: 19px; color: var(--muted); max-width: 40em; }
+.status { display: inline-block; background: var(--warn-bg); color: var(--warn); border-radius: 999px; padding: 2px 12px; font-size: 14px; font-weight: 600; margin-bottom: 16px; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 16px 0; }
+.card { border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px; }
+.card h3 { margin: 0 0 4px; font-size: 16px; }
+.card p { margin: 0; color: var(--muted); font-size: 15px; }
+.table-wrap { overflow-x: auto; margin: 16px 0; }
+table { border-collapse: collapse; width: 100%; font-size: 15px; }
+th, td { border-bottom: 1px solid var(--rule); padding: 6px 10px; text-align: left; vertical-align: top; }
+th { font-weight: 600; }
+ol.steps { padding-left: 20px; }
+ol.steps li { margin: 6px 0; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: 20px 0 0; }
+.actions a { border: 1px solid var(--rule); border-radius: 6px; padding: 6px 14px; text-decoration: none; }
+.actions a.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+footer { color: var(--muted); font-size: 14px; border-top: 1px solid var(--rule); padding: 16px; text-align: center; }
+</style>
+</head>
+<body>
+<header class="site">
+  <span class="home">cancho-fetch</span>
+  <nav>
+    <a href="#idea">The idea</a>
+    <a href="#row">The row</a>
+    <a href="#limits">What it will not do</a>
+    <a href="#plan">Plan</a>
+    <a href="https://github.com/alpibrusl/cancho-fetch">Repository</a>
+  </nav>
+</header>
+<main>
+  <span class="status">Design only. Nothing is built.</span>
+  <h1>HTTP to a list of hosts you can read.</h1>
+  <p class="lede">An agent-safe <code>fetch</code> written in cancho. The hosts it may reach are a literal in the binary,
+  shown by <code>cancho authority</code> as one <code>net_out</code> label each. Nothing else in the binary can reach the network.</p>
+  <div class="actions">
+    <a class="primary" href="https://github.com/alpibrusl/cancho-fetch/blob/main/docs/design.md">Read the design</a>
+    <a href="https://github.com/alpibrusl/cancho-fetch">Repository</a>
+    <a href="https://github.com/alpibrusl/cancho-tools">cancho-tools</a>
+  </div>
+
+  <h2 id="idea">The idea</h2>
+  <div class="cols">
+    <div class="card"><h3>The list is in the row</h3><p>A reviewer reads <code>net_out("api.example.com:443")</code> instead of trusting a flag a caller can set.</p></div>
+    <div class="card"><h3>One binary per list</h3><p>A different allow-list is a different build. A host removed shrinks the row; a host added changes the build input.</p></div>
+    <div class="card"><h3>Refusals are data</h3><p>A host outside the list, a redirect elsewhere, a body over the cap: each is a rule tag with a repair, not a sentence on stderr.</p></div>
+  </div>
+<pre><code>fetch get  /v1/items --host api.example.com --max-bytes 65536
+fetch post /v1/items --host api.example.com --body-stdin</code></pre>
+
+  <h2 id="row">The authority row</h2>
+  <p>For a build with two hosts, the design expects this (to be measured at step 1):</p>
+<pre><code>performs
+    io_write
+    net_out("api.example.com:443")
+    net_out("static.example.com:443")
+    fs_read("/dev/urandom")       the TLS seed
+    fs_read("&lt;roots bundle&gt;")    the trust anchors
+    clock                         the deadline
+bounded: true    ffi: none    net_in: none</code></pre>
+  <p>This depends on cancho's exact host matching (edition 10,
+  <a href="https://github.com/alpibrusl/cancho/pull/561">cancho#561</a>). Before it, the host half of a bound is a prefix:
+  <code>127.0.0.1</code> admits <code>127.0.0.10</code>.</p>
+
+  <h2 id="limits">What it will not do</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Not offered</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>A full URL, or a host outside the list</td><td>A URL is a second place a host can be written. Refused before a socket opens.</td></tr>
+      <tr><td><code>Authorization</code>, <code>Cookie</code>, proxies</td><td>No credentials in v1; an open question in the design.</td></tr>
+      <tr><td>Methods other than GET, HEAD, POST</td><td>The rest of <code>curl</code> is a refusal with a pointer to <code>curl</code>.</td></tr>
+      <tr><td>Guarantees about the resolved address</td><td>cancho checks the name, not the address. A non-public peer is refused after connect, which stops the request but not the handshake. The design says so.</td></tr>
+      <tr><td><code>ssh</code></td><td>No design, no asker, and "what may the agent do on the other side" has no answer a row can show.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2 id="plan">Plan</h2>
+  <ol class="steps">
+    <li>cancho#561 merged; scaffolding and the ceiling gate.</li>
+    <li>Plain HTTP GET and HEAD to a baked host on loopback; measure the row, the peer check and the resolver caveat.</li>
+    <li>HTTPS, with the trust roots and the seed. The TLS stack is not independently reviewed (cancho#209); the README says so.</li>
+    <li>POST, then MCP (<code>--with fetch</code>), then redirects.</li>
+  </ol>
+  <p>No test touches the Internet. Loopback servers and a CA made for the tests, mutation testing over the request builder, the header
+  allow-list, the redirect logic and the peer check.</p>
+</main>
+<footer>cancho-fetch &middot; a sibling of <a href="https://github.com/alpibrusl/cancho-tools">cancho-tools</a> &middot; design stage</footer>
+</body>
+</html>
