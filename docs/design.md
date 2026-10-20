@@ -66,6 +66,32 @@ fetch post <path> [--host H] --body-stdin | --body TEXT ...
 * Class (`contract/describe.cho`): `irreversible-consequential` for all three verbs. A `GET` can have effects off the
   machine, and the envelope class is about what the caller can undo. Opt-in in the MCP server, as `run` is (`--with fetch`).
 
+### 3.1 Held to the agent-first list
+
+`fetch` is held to the same checked list as the tools in `cancho-tools` (`docs/agent-first.md` there, enforced by
+`tests/conformance/test_agent_first.py`), with no exception:
+
+* **Self-describing**: `introspect` and `skill` carry every flag, operand, rule, limit and guarantee, with help text on all
+  of them. The baked hosts are in `introspect` (`hosts`) and in the MCP `inputSchema` as the `enum` of `--host`, so a model
+  is told which hosts it may use before it tries one.
+* **Every refusal is data and says what to do.** One JSON record on standard output, nothing on standard error, a rule
+  from the tool's own table, the exit status the table promises, and a non-empty `hint`. Where the repair is mechanical it
+  is a `repair` (`fetch.host-not-allowed` carries `retry` with each baked host; `fetch.redirect-not-allowed` carries the
+  target in `detail` so the caller can decide; `fetch.body-too-large` carries the bytes read and `--max-bytes`'s ceiling).
+* **Byte-identical whatever the environment** (locale, zone, terminal): the envelope carries no timestamps from the
+  machine and no resolver-dependent text; the connected peer address is data, not prose.
+* **MCP annotations from the description**: `readOnlyHint` false (a request can have effects off the machine, even a
+  `GET`), `destructiveHint` true, `idempotentHint` true for `get` and `head` and false for `post`, `openWorldHint` true.
+  A host that gates on them will confirm a `fetch` call, which is the intended default.
+* **The refusals a fetch can hit are listed up front** (so the rule table is complete before any code): `fetch.host-not-allowed`,
+  `fetch.url-not-a-path`, `fetch.path-malformed`, `fetch.header-forbidden`, `fetch.redirect-limit`,
+  `fetch.redirect-not-allowed`, `fetch.body-too-large`, `fetch.timeout`, `fetch.peer-not-public`, `fetch.tls-chain`,
+  `fetch.tls-name`, `fetch.tls-expired`, `fetch.tls-protocol`, `fetch.response-*` (the framing tags), `fetch.connect-failed`
+  (with the errno) and the shared `args.*`, `path.*`, `limit.*` rules.
+
+What is not checked, as there: whether a model picks the right host or flag from the description, and whether the
+envelope fits a context window; both are empirical.
+
 Not offered, each with a tag and a pointer to `curl`: other methods (`PUT`, `DELETE`, `PATCH`), proxies, cookies, HTTP/2,
 client certificates, `Range`, compression (`Accept-Encoding: identity` is sent), uploads of files, a bare IP as a host.
 
