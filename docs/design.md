@@ -374,3 +374,43 @@ the raw value, e.g. `...=/run/secrets/key,X-Api-Key`).
 * **Not built, deliberately:** a credential for a wildcard host, several credentials for one host, a token refreshed at run
   time, cookies, and any credential over plain http.
 
+## 8.7 fetch against curl, measured
+
+`python3 scripts/bench.py` (curl 8.5.0 with OpenSSL 3.0.13; Linux x86-64, 4 cores, a shared machine; one process per request,
+output discarded, medians of 40 runs for 1 KiB, 15 for 1 MiB and 7 for 16 MB; the server is a Python threaded server in
+another process holding the body in memory; the TLS certificates are ECDSA P-256). `scripts/maxrss.c` launches each process,
+because a child forked from Python inherits Python's 24 MB high-water mark (the first version of this benchmark measured the
+harness, not the tools). Times are wall milliseconds, memory the peak resident set in KiB.
+
+| body | | curl | fetch (json) | fetch (text) |
+|---|---|---|---|---|
+| 1 KiB | http | 6.1 ms, 11,022 KiB | **1.9 ms**, 2,726 KiB | 2.0 ms, 2,702 KiB |
+| 1 KiB | https | 9.8 ms, 12,958 KiB | **3.4 ms**, 2,996 KiB | 3.4 ms, 2,992 KiB |
+| 1 MiB | http | **6.9 ms**, 11,108 KiB | 8.2 ms, 6,600 KiB | 7.8 ms, 6,600 KiB |
+| 1 MiB | https | 11.6 ms, 12,908 KiB | 10.5 ms, 6,936 KiB | **9.8 ms**, 6,936 KiB |
+| 16 MB | http | **15.0 ms**, 11,040 KiB | 100.5 ms, 50,000 KiB | 104.1 ms, 42,692 KiB |
+| 16 MB | https | **22.1 ms**, 12,856 KiB | 111.8 ms, 50,288 KiB | 94.9 ms, 43,040 KiB |
+
+* **For one small request `fetch` is about three times faster and uses a quarter of the memory.** The difference is not the
+  protocol; it is that curl loads its libraries and initialises them (5.5 ms of CPU to fetch 1 KiB over http), and `fetch` is
+  one static executable. For an agent that makes many small requests, one process each, that is the number that matters.
+* **At 1 MiB they are level; at 16 MB `fetch` is five to seven times slower** (about 6 ns a byte of CPU, ~170 MB/s) **and holds
+  four times the memory** (50 MB for a 16 MB body: the body is kept whole under `--max-bytes`, then copied into the JSON
+  envelope; in `--format text` it is 43 MB). The memory is bounded by the cap and the cap's ceiling is 16 MiB, so the worst case is
+  about 50 MB, but "bounded" is not "small". The time is the per-byte decoding in `absorb` and the escaping of the body; a body
+  of that size is outside what the tool is for (an answer an agent can read), and the cap says so.
+* **TLS costs `fetch` little here**: a handshake adds about 1.5 ms to a 1 KiB request (3.4 ms against 1.9 ms), and about 13 ms of CPU over plain http for 16 MB.
+  The bytes are right (16,000,000 over TLS with the same MD5 as the source). **I cannot explain the 16 MB figure from the engine's
+  documented throughput** (`docs/tls-performance.md` in cancho; ChaCha20 at 135 MB/s would cost ~120 ms), and did not profile it.
+  The certificates are P-256 ECDSA, the cheap case for the engine's anchor tables; an RSA or P-384 chain, which most public sites
+  serve, was not measured. The ROADMAP's "4 to 7 times OpenSSL's CPU for a handshake" is therefore neither confirmed nor
+  contradicted by this benchmark: a whole process is 3 ms against 9 ms because curl's start-up dwarfs both handshakes.
+* **What the benchmark found in `fetch`**: a trap (SIGILL) on any response whose first read held more than 8 KiB of body, which
+  failed every 1 MiB and 16 MB run of the first attempt (8.1 fixed it and `test_a_body_larger_than_the_first_read_buffers`
+  holds it). No earlier test had a body over 100 KB.
+* **What the benchmark found in the benchmark**: the 45 ms that every https request seemed to cost was the test server's
+  Nagle/delayed-ACK interaction (it is gone with `TCP_NODELAY`; `BENCH_NODELAY=0` brings it back), identical for both tools.
+
+Not measured: many requests on one connection (the tool does one), IPv6, a slow or distant server, a server that answers with
+`Content-Encoding` (the tool asks for `identity`), and anything on a machine that is not this one.
+

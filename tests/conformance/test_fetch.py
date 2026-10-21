@@ -102,9 +102,16 @@ class Server:
         self.reply = reply
         self.hold = hold
         self.requests = []
-        self.sock = socket.socket()
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind(("127.0.0.1", port))
+        # `localhost` may resolve to ::1 first (a CI runner has IPv6, this sandbox does not): listen on both when we can.
+        try:
+            self.sock = socket.socket(socket.AF_INET6)
+            self.sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.sock.bind(("::", port))
+        except OSError:
+            self.sock = socket.socket()
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.sock.bind(("127.0.0.1", port))
         self.sock.listen(8)
         self.stop = False
         self.thread = threading.Thread(target=self.loop, daemon=True)
@@ -247,6 +254,19 @@ class Fetch(unittest.TestCase):
             s = self.serve(lambda req, r=reply: r)
             rc, doc, _ = run(OPEN, "--max-bytes", "100", "get", "/")
             self.assertEqual((rc, self.rule(doc)), (8, "fetch.body-too-large"))
+            s.close()
+            time.sleep(0.05)
+
+    def test_a_body_larger_than_the_first_read_buffers(self):
+        """Found by the benchmark: a response whose head and a long body arrive together left more body bytes after the head
+        than the 8 KiB read buffer holds, and the tool trapped (SIGILL). Every framing, with the whole response in one send."""
+        big = b"abcdefghij" * 20000  # 200,000 bytes
+        for name, reply in (("length", ok(big)),
+                            ("chunked", b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n%x\r\n%s\r\n0\r\n\r\n" % (len(big), big)),
+                            ("close", b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n" + big)):
+            s = self.serve(lambda req, r=reply: r)
+            rc, doc, _ = run(OPEN, "get", "/")
+            self.assertEqual((name, rc, doc["data"]["body_bytes"]), (name, 0, 200000), doc)
             s.close()
             time.sleep(0.05)
 

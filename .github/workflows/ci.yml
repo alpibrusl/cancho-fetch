@@ -1,0 +1,117 @@
+name: ci
+
+# The tool is built with the compiler its cancho.toml pins (`[package] cancho`), not with whatever is newest: the sources were
+# written for that revision, and the authority manifests are derived by it (a newer compiler's report may differ in format).
+# Building that compiler takes minutes, so it is built once per pin and cached; every job restores it.
+#
+# A branch with a pull request is built by the pull request; main is built on push.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  compiler:
+    name: the pinned compiler
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      rev: ${{ steps.pin.outputs.rev }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The revision cancho.toml pins
+        id: pin
+        run: |
+          rev=$(python3 -c 'import tomllib; print(tomllib.load(open("cancho.toml","rb"))["package"]["cancho"])')
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+          echo "pinned compiler: $rev"
+
+      - name: Restore the compiler built for that revision
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: cancho-bin
+          key: cancho-compiler-${{ runner.os }}-${{ steps.pin.outputs.rev }}
+
+      - name: Build it (only when it is not cached)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --filter=blob:none https://github.com/alpibrusl/cancho cancho-src
+          git -C cancho-src checkout "${{ steps.pin.outputs.rev }}"
+          cd cancho-src
+          # the repository pins its Rust toolchain (rust-toolchain.toml); make sure it is there
+          rustup toolchain install || true
+          rustup show
+          cargo build --release -p cancho
+          mkdir -p ../cancho-bin
+          cp target/release/cancho ../cancho-bin/cancho
+
+      - name: It runs
+        run: ./cancho-bin/cancho --version || ./cancho-bin/cancho 2>&1 | head -3
+
+  # The fast gates: the schema and the manifest are the committed record of what the tool may do, and the address-range
+  # tests need no network and no TLS.
+  checks:
+    name: schema, manifest, address ranges
+    needs: compiler
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: cancho-bin
+          key: cancho-compiler-${{ runner.os }}-${{ needs.compiler.outputs.rev }}
+          fail-on-cache-miss: true
+      - name: Put the compiler on PATH
+        run: echo "$PWD/cancho-bin" >> "$GITHUB_PATH"
+      - name: The address ranges (cancho test)
+        run: cancho test tests/peer_test.cho tools/fetch/fetchpeer.cho --std
+      - name: schemas/fetch.v1.json is what scripts/schemas.py writes
+        run: python3 scripts/schemas.py --check
+      - name: The dependencies, then the authority manifest is what the compiler derives
+        run: |
+          cancho install
+          python3 scripts/manifest.py --check
+
+  fetch:
+    name: fetch against loopback servers (http and https)
+    needs: compiler
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: cancho-bin
+          key: cancho-compiler-${{ runner.os }}-${{ needs.compiler.outputs.rev }}
+          fail-on-cache-miss: true
+      - name: Put the compiler on PATH
+        run: echo "$PWD/cancho-bin" >> "$GITHUB_PATH"
+      - name: The suite (two builds of the tool, then the tests; the certificates are made with openssl)
+        run: python3 -m unittest -v tests/conformance/test_fetch.py
+
+  mcp:
+    name: the MCP server in front of fetch
+    needs: compiler
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: cancho-bin
+          key: cancho-compiler-${{ runner.os }}-${{ needs.compiler.outputs.rev }}
+          fail-on-cache-miss: true
+      - name: Put the compiler on PATH
+        run: echo "$PWD/cancho-bin" >> "$GITHUB_PATH"
+      - name: The suite (a build of the tool and of the server, then the tests)
+        run: python3 -m unittest -v tests/conformance/test_mcp.py
