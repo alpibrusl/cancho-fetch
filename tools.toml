@@ -8,12 +8,17 @@
 # given (scripts/manifest.py compares the derived `net_out` labels with them). `ffi` and `net_in` are not, `bounded` must
 # be true, and nothing is written to disk. `clock` is allowed for the deadline, as `run` has it in cancho-tools.
 #
-# `fetch` reads no file and writes none (the trust roots and the TLS seed come with HTTPS, a later step, and are
-# added here with their reasons then).
+# `fetch` writes no file and reads none but the entropy for a TLS seed (`seed` below); the trust roots are embedded.
 
 max_tools = 1
 
 [fetch]
 allow = ["args", "clock", "conn_read", "conn_write", "err_write", "heap", "io_write", "poll"]
 net_out = "baked"
+# The TLS seed: `fs_read("/dev/urandom")`, and only when an https:// host is baked (scripts/manifest.py compares). No other
+# file is read: the trust roots are a build input embedded in the binary.
+seed = "https-only"
+# Credentials: a file named at build time (`--credential HOST=PATH`) for an https:// host, read when that host is dialed. Each
+# `fs_read(PATH)` in the row must be declared in generated/fetch/fetch.cho's credentials() for a baked https host, and each
+# declared path must be in the row (scripts/manifest.py).
 forbid = ["ffi", "net_in", "file_write", "dir_write", "exec"]

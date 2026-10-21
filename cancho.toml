@@ -37,6 +37,91 @@ git = "https://github.com/alpibrusl/cancho"
 rev = "597e6b01aae0f962adc9923d303aa94b6468f5f3"
 path = "packages/http-client/.cancho-vcs/http_client_wire"
 
+[dependencies.tls]
+git = "https://github.com/alpibrusl/cancho"
+rev = "597e6b01aae0f962adc9923d303aa94b6468f5f3"
+path = "packages/tls/.cancho-vcs/tls"
+
+[dependencies.tls_cident]
+git = "https://github.com/alpibrusl/cancho"
+rev = "597e6b01aae0f962adc9923d303aa94b6468f5f3"
+path = "packages/tls/.cancho-vcs/tls_cident"
+
+[dependencies.tls_client]
+git = "https://github.com/alpibrusl/cancho"
+rev = "597e6b01aae0f962adc9923d303aa94b6468f5f3"
+path = "packages/tls/.cancho-vcs/tls_client"
+
+[dependencies.tls_client12]
+git = "https://github.com/alpibrusl/cancho"
+rev = "597e6b01aae0f962adc9923d303aa94b6468f5f3"
+path = "packages/tls/.cancho-vcs/tls_client12"
+
+[dependencies.tls_clientauth]
+git = "https://github.com/alpibrusl/cancho"
+rev = "597e6b01aae0f962adc9923d303aa94b6468f5f3"
+path = "packages/tls/.cancho-vcs/tls_clientauth"
+
+[dependencies.tls_hello]
+git = "https://github.com/alpibrusl/cancho"
+rev = "597e6b01aae0f962adc9923d303aa94b6468f5f3"
+path = "packages/tls/.cancho-vcs/tls_hello"
+
+[dependencies.tls_identity]
+git = "https://github.com/alpibrusl/cancho"
+rev = "597e6b01aae0f962adc9923d303aa94b6468f5f3"
+path = "packages/tls/.cancho-vcs/tls_identity"
+
+[dependencies.tls_message]
+git = "https://github.com/alpibrusl/cancho"
+rev = "597e6b01aae0f962adc9923d303aa94b6468f5f3"
+path = "packages/tls/.cancho-vcs/tls_message"
+
+[dependencies.tls_record]
+git = "https://github.com/alpibrusl/cancho"
+rev = "597e6b01aae0f962adc9923d303aa94b6468f5f3"
+path = "packages/tls/.cancho-vcs/tls_record"
+
+[dependencies.tls_saved]
+git = "https://github.com/alpibrusl/cancho"
+rev = "597e6b01aae0f962adc9923d303aa94b6468f5f3"
+path = "packages/tls/.cancho-vcs/tls_saved"
+
+[dependencies.tls_server]
+git = "https://github.com/alpibrusl/cancho"
+rev = "597e6b01aae0f962adc9923d303aa94b6468f5f3"
+path = "packages/tls/.cancho-vcs/tls_server"
+
+[dependencies.tls_slot]
+git = "https://github.com/alpibrusl/cancho"
+rev = "597e6b01aae0f962adc9923d303aa94b6468f5f3"
+path = "packages/tls/.cancho-vcs/tls_slot"
+
+[dependencies.tls_ticket]
+git = "https://github.com/alpibrusl/cancho"
+rev = "597e6b01aae0f962adc9923d303aa94b6468f5f3"
+path = "packages/tls/.cancho-vcs/tls_ticket"
+
+[dependencies.x509]
+git = "https://github.com/alpibrusl/cancho"
+rev = "597e6b01aae0f962adc9923d303aa94b6468f5f3"
+path = "packages/x509/.cancho-vcs/x509"
+
+[dependencies.x509_key]
+git = "https://github.com/alpibrusl/cancho"
+rev = "597e6b01aae0f962adc9923d303aa94b6468f5f3"
+path = "packages/x509/.cancho-vcs/x509_key"
+
+[dependencies.x509_names]
+git = "https://github.com/alpibrusl/cancho"
+rev = "597e6b01aae0f962adc9923d303aa94b6468f5f3"
+path = "packages/x509/.cancho-vcs/x509_names"
+
+[dependencies.x509_verify]
+git = "https://github.com/alpibrusl/cancho"
+rev = "597e6b01aae0f962adc9923d303aa94b6468f5f3"
+path = "packages/x509/.cancho-vcs/x509_verify"
+
 [[bin]]
 name = "fetch"
 sources = ["tools/fetch", "generated/fetch"]

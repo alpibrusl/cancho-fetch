@@ -55,8 +55,8 @@ fetch post <path> [--host H] --body-stdin | --body TEXT ...
   caller cannot downgrade. (This replaces an earlier draft in which the scheme followed the port: a service on
   `:8443` or `:8080` is ordinary, and a rule that guesses the scheme from a number is a rule that is wrong somewhere.)
 * **Request headers** are an allow-list (`Accept`, `Accept-Language`, `Content-Type`, `If-None-Match`, `If-Modified-Since`,
-  `User-Agent`, `X-*`). `Authorization`, `Cookie`, `Proxy-*` and `Host` are `fetch.header-forbidden` in v1 (open
-  question 2: credentials).
+  `User-Agent`, `X-*`). `Authorization`, `Cookie`, `Proxy-*` and `Host` are not accepted from the caller at all (there is no flag for a header but
+  `--accept`, `--content-type`); a credential is the operator's, built in (8.6).
 * **Response** envelope: `status`, `headers` (an allow-list, lowercased), `body` (text if valid UTF-8, else base64 with a
   `body_encoding` field), `truncated` (the cap was hit), `redirects` (each hop), `peer` (the address connected to),
   `tls` (version, cipher, whether the chain verified).
@@ -211,9 +211,11 @@ the other side" has no answer a row can show).
 
 1. **Share or copy `cancho-tools`' scaffolding?** Depend on its published package (`scripts/package.py`) for `contract/` and the
    envelope, or copy the minimum and keep the shapes identical? Dependence is less drift; copying is less coupling.
-2. **Credentials.** v1 forbids `Authorization` and `Cookie`. An agent that needs an API key has no way in. Options: a header
-   whose value is read from an environment variable named at build time (the row would show no new label, since env comes in
-   `args`), a baked token (worse), or "not in v1". Which?
+2. **Credentials.** *Decided and built (8.6): a file per https host, named at build time.* The options this question listed were
+   wrong in one place: "a header whose value is read from an environment variable ... the row would show no new label,
+   since env comes in `args`" is **false**. A cancho program has no `getenv` without `Ffi` (`docs/agent-toolbox.md`
+   section on determinism: "no environment ... the language has no `getenv`"), and `Args` carries the command line, not the
+   environment. An environment variable would need `Ffi`, which the ceiling forbids. A file is the channel the row can name.
 3. **Trust roots.** `fs_read("<bundle>")` in the row, or roots baked into the binary at build (no `fs_read`, a larger binary, a
    rebuild to rotate)? Baking makes the row smaller and the rotation story worse.
 4. **`packages/http-client` or a small request writer and the existing framing rules?** The package is built for many requests
@@ -318,6 +320,57 @@ and `tests/conformance/test_mcp.py` (10 tests, through the real server and the r
   method}`; `host`, `path`, `method` and `status` describe the last request. Fragments are dropped from a `Location`.
 * **Where the loop is**: the generated main (each baked host has its own `Out`, so the next hop's capability is picked by
   index); `exchange` decides the target and returns it, `retarget` rebuilds the plan. The authority row did not change.
-* **Not built**: a redirect to an `https://` baked host (no HTTPS yet); credentials are not sent at all, so the
-  cross-host credential-leak case does not arise (it will with credentials, and the rule then is: dropped on a host change).
+* **Not built**: a redirect to an `https://` baked host (no HTTPS yet); (credentials, 8.6: the rule is that each hop uses its own host's credential, so none follows a redirect).
+
+## 8.5 Step 2 as built: `https`, on the pure TLS client, with the roots in the binary
+
+`fetch_build.py --host https://h[:443] --roots ca.pem`. The decision you made (pure TLS, baked roots) and what it costs:
+
+* **The client is `packages/tls` and `packages/x509` at the pinned revision (597e6b0), unreviewed.** `docs/ROADMAP.md` #281
+  says its independent review (#209) has not happened and that a full handshake costs 4 to 7 times OpenSSL's CPU. Nothing here
+  makes either better; `fetch` over `https` is therefore **not to be described as production-ready**, and the README says so.
+* **The trust roots are a build input, not a file read at run time**: `--roots FILE` is embedded as a literal, so the row has
+  no `fs_read` of a roots path, a changed root is a rebuild, and a missing `--roots` with an `https://` host is a build
+  error. The chain is always checked against the name as baked (`localhost` in the tests); there is no flag that turns
+  verification off.
+* **The row gains one label, `fs_read("/dev/urandom")`**, for the 32-byte seed of the engine's generator, and only when an
+  `https://` host is baked: `scripts/manifest.py` fails if the label appears without one (`tools.toml`: `seed = "https-only"`).
+  Everything else is as before: the TLS engine takes no capability.
+* **Refusals**: one rule, `fetch.tls`, with `detail.tag` from the engine (`tls-...`, `x509-...`). The tests hold: a
+  certificate for another name, a chain from an authority that is not trusted, a plain HTTP server answering on an `https`
+  port, a silent server cut at the deadline. In each, nothing of the request reaches the server.
+* **Redirects across schemes** are followed only to a baked entry of the same scheme as the `Location` says
+  (`http://h` never reaches an `https` entry, or the reverse); `h:443` and `h` are one authority for `https`.
+* **`data.scheme`** is `http` or `https`. A close-delimited body over TLS needs the peer's `close_notify`, as it should.
+* **Measured: the compile.** The build now compiles 17 more modules and takes about 2.5 minutes (the `install`/`manifest`
+  steps do not, the `build` does), and the suite builds twice, so it takes about 10 minutes. `tests/peer_test.cho` was
+  9 minutes before the address ranges moved to their own module (`fetchpeer`), and is 0.2 s now.
+* **Not done**: ALPN and resumption are off (not asked for); the memory of a handshake is not measured here (the engine
+  is opened with one work area); a host in `*.suffix` form cannot be `https` yet (the name check is against the baked name).
+
+## 8.6 Credentials: a file per https host, the secret never in the caller's hands
+
+`fetch_build.py --host https://api.example.com --credential api.example.com=/run/secrets/api_token`
+(`HOST=PATH[,Header]`; the header defaults to `Authorization`, sent as `Bearer <token>`; with a header named, the token is
+the raw value, e.g. `...=/run/secrets/key,X-Api-Key`).
+
+* **The channel is a file, and the row says which.** The binary gains `fs_read("/run/secrets/api_token")` per credentialed
+  host, nothing else; `scripts/manifest.py` fails if a `fs_read` is not `/dev/urandom` (with an https host) or a declared
+  credential path, if a declared path is not in the row, or if a credential is for a host that is not a baked `https://` one
+  (`tools.toml`). The operator mounts the secret (a container secret, a tmpfs file); the agent never has it, never names it,
+  and cannot ask for another: there is no flag that selects a credential or a header.
+* **Only over https, and only to its own host.** `--credential` for an `http://` entry is a build error. The credential is
+  looked up per request by the baked host index, so a redirect to another host (which is itself a baked entry) uses that
+  host's credential or none: it never follows. Tested with a redirect from a credentialed https host to a plain one (the
+  second server sees no token) and to a second credentialed one (it sees its own, not the first's).
+* **Read when that host is dialed, before the connection.** A file that is missing, empty, or not a token (visible ASCII, no
+  blank or control byte) is `fetch.credential-unavailable` with `detail.path`: exit 8, and the test checks the server saw
+  nothing. A trailing newline is dropped. The secret is never in an error, the envelope, `introspect` or `skill`; the envelope
+  has `data.credentialed` (true or false) so a caller knows without being told the value.
+* **Erasure is best effort.** The token is read into a region array, copied into the request's header area (also a region
+  array, not a heap buffer, so it can be cleared), and both are zeroed after the request is written. cancho has no guaranteed
+  erasure (`docs/tls-pure.md` 7.3), and the TLS engine holds the plaintext record it sealed; so a process dump during a request
+  can contain the token. The mitigation is the usual one: a short-lived process, one request.
+* **Not built, deliberately:** a credential for a wildcard host, several credentials for one host, a token refreshed at run
+  time, cookies, and any credential over plain http.
 

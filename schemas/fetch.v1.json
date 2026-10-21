@@ -231,6 +231,15 @@
             "head"
           ]
         },
+        "scheme": {
+          "enum": [
+            "http",
+            "https"
+          ]
+        },
+        "credentialed": {
+          "type": "boolean"
+        },
         "host": {
           "type": "string"
         },
@@ -326,6 +335,8 @@
       },
       "required": [
         "method",
+        "scheme",
+        "credentialed",
         "host",
         "path",
         "status",
