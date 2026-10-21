@@ -384,22 +384,29 @@ harness, not the tools). Times are wall milliseconds, memory the peak resident s
 
 | body | | curl | fetch (json) | fetch (text) |
 |---|---|---|---|---|
-| 1 KiB | http | 6.1 ms, 11,022 KiB | **1.9 ms**, 2,726 KiB | 2.0 ms, 2,702 KiB |
-| 1 KiB | https | 9.8 ms, 12,958 KiB | **3.4 ms**, 2,996 KiB | 3.4 ms, 2,992 KiB |
-| 1 MiB | http | **6.9 ms**, 11,108 KiB | 8.2 ms, 6,600 KiB | 7.8 ms, 6,600 KiB |
-| 1 MiB | https | 11.6 ms, 12,908 KiB | 10.5 ms, 6,936 KiB | **9.8 ms**, 6,936 KiB |
-| 16 MB | http | **15.0 ms**, 11,040 KiB | 100.5 ms, 50,000 KiB | 104.1 ms, 42,692 KiB |
-| 16 MB | https | **22.1 ms**, 12,856 KiB | 111.8 ms, 50,288 KiB | 94.9 ms, 43,040 KiB |
+| 1 KiB | http | 7.4 ms, 10,816 KiB | **2.0 ms**, 2,684 KiB | 2.0 ms, 2,686 KiB |
+| 1 KiB | https | 9.2 ms, 12,820 KiB | **3.6 ms**, 2,924 KiB | 4.0 ms, 2,932 KiB |
+| 1 MiB | http | 6.8 ms, 10,896 KiB | 7.5 ms, 6,572 KiB | **2.8 ms**, 3,628 KiB |
+| 1 MiB | https | 12.7 ms, 12,780 KiB | 9.6 ms, 6,820 KiB | **5.0 ms**, 4,004 KiB |
+| 16 MB | http | **14.1 ms**, 10,944 KiB | 76.0 ms, 34,760 KiB | 16.2 ms, 18,176 KiB |
+| 16 MB | https | **21.1 ms**, 12,808 KiB | 91.7 ms, 34,992 KiB | 28.1 ms, 18,596 KiB |
+
+(Second round, after the change below; the first round's numbers were 1 MiB http 8.2 ms and 16 MB http 100 ms / 50 MB in
+json, 104 ms / 43 MB in text.)
 
 * **For one small request `fetch` is about three times faster and uses a quarter of the memory.** The difference is not the
-  protocol; it is that curl loads its libraries and initialises them (5.5 ms of CPU to fetch 1 KiB over http), and `fetch` is
+  protocol; it is that curl loads its libraries and initialises them (about 6 ms of CPU to fetch 1 KiB over http), and `fetch` is
   one static executable. For an agent that makes many small requests, one process each, that is the number that matters.
-* **At 1 MiB they are level; at 16 MB `fetch` is five to seven times slower** (about 6 ns a byte of CPU, ~170 MB/s) **and holds
-  four times the memory** (50 MB for a 16 MB body: the body is kept whole under `--max-bytes`, then copied into the JSON
-  envelope; in `--format text` it is 43 MB). The memory is bounded by the cap and the cap's ceiling is 16 MiB, so the worst case is
-  about 50 MB, but "bounded" is not "small". The time is the per-byte decoding in `absorb` and the escaping of the body; a body
-  of that size is outside what the tool is for (an answer an agent can read), and the cap says so.
-* **TLS costs `fetch` little here**: a handshake adds about 1.5 ms to a 1 KiB request (3.4 ms against 1.9 ms), and about 13 ms of CPU over plain http for 16 MB.
+* **Text mode was doing the JSON envelope's work.** `callgrind` on a 1 MiB body showed 27.0M instructions, most of them
+  `json.put_string` (about 15 an input byte) and the UTF-8 check, which ran in `--format text` although text mode prints
+  the body as it is. Text mode now skips both: 0.99M instructions, 1 MiB http 7.8 ms to 2.8 ms, 16 MB 104 ms to 16 ms (level
+  with curl at 1 MiB, within 1.2 times at 16 MB). Bodies of known length or read-to-close are also read straight into the body
+  buffer, reserved up front, instead of through the 8 KiB staging buffer; chunked bodies still go through `absorb`.
+* **In json mode a 16 MB body is five times slower than curl** (76 ms; 35 MB of memory, down from 50 MB). The remaining cost
+  is the escaping inside `std.json`, which `fetch` cannot replace: the only way to hand it pre-escaped text is `put_fragment`,
+  which parses and validates what it is given. The memory is bounded by the cap (the ceiling is 16 MiB), but "bounded" is
+  not "small". A body of that size is outside what the tool is for (an answer an agent can read), and the cap says so.
+* **TLS costs `fetch` little here**: a handshake adds about 1.5 ms to a 1 KiB request (3.6 ms against 2.0 ms), and about 12 ms of CPU over plain http for 16 MB (text mode).
   The bytes are right (16,000,000 over TLS with the same MD5 as the source). **I cannot explain the 16 MB figure from the engine's
   documented throughput** (`docs/tls-performance.md` in cancho; ChaCha20 at 135 MB/s would cost ~120 ms), and did not profile it.
   The certificates are P-256 ECDSA, the cheap case for the engine's anchor tables; an RSA or P-384 chain, which most public sites
