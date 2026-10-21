@@ -29,7 +29,7 @@ import tls;
 import http_client_wire;
 
 pub fn extra() -> [] &static [byte] {
-    return "fetch.method|2|never|the METHOD is not one this tool sends (get, head, post);fetch.tls|8|never|the TLS handshake or the record layer failed (detail.tag says why: a name, a chain, a protocol error);fetch.redirect-not-allowed|2|never|a redirect points somewhere this build was not given;fetch.redirect-limit|8|never|more redirects than --max-redirects;fetch.body-required|2|never|post needs --body and --content-type;fetch.body-not-allowed|2|never|--body and --content-type belong to post;fetch.request-body-too-large|2|never|--body is larger than the 65536 bytes this tool sends;fetch.url-not-a-path|2|never|PATH is a request target (it begins with a single /), not a URL;fetch.path-malformed|2|never|PATH has a byte a request target may not hold;fetch.host-not-allowed|2|sometimes|--host names no host this build was given;fetch.host-required|2|sometimes|more than one host was baked in and --host was not given;fetch.header-malformed|2|never|--accept holds a byte a header value may not hold;fetch.connect-failed|8|never|the connection could not be made;fetch.peer-not-public|8|never|the host resolved to a private, loopback or link-local address and this build does not allow it;fetch.timeout|8|never|the deadline passed before the response was complete;fetch.body-too-large|8|never|the response body is larger than --max-bytes;fetch.response-malformed|8|never|the response is not one this tool reads (the detail names the framing rule);fetch.response-truncated|8|never|the connection ended before the response was complete";
+    return "fetch.method|2|never|the METHOD is not one this tool sends (get, head, post);fetch.credential-unavailable|8|never|the credential this build holds for the host could not be read or is not a token (the operator's configuration, not the caller's);fetch.tls|8|never|the TLS handshake or the record layer failed (detail.tag says why: a name, a chain, a protocol error);fetch.redirect-not-allowed|2|never|a redirect points somewhere this build was not given;fetch.redirect-limit|8|never|more redirects than --max-redirects;fetch.body-required|2|never|post needs --body and --content-type;fetch.body-not-allowed|2|never|--body and --content-type belong to post;fetch.request-body-too-large|2|never|--body is larger than the 65536 bytes this tool sends;fetch.url-not-a-path|2|never|PATH is a request target (it begins with a single /), not a URL;fetch.path-malformed|2|never|PATH has a byte a request target may not hold;fetch.host-not-allowed|2|sometimes|--host names no host this build was given;fetch.host-required|2|sometimes|more than one host was baked in and --host was not given;fetch.header-malformed|2|never|--accept holds a byte a header value may not hold;fetch.connect-failed|8|never|the connection could not be made;fetch.peer-not-public|8|never|the host resolved to a private, loopback or link-local address and this build does not allow it;fetch.timeout|8|never|the deadline passed before the response was complete;fetch.body-too-large|8|never|the response body is larger than --max-bytes;fetch.response-malformed|8|never|the response is not one this tool reads (the detail names the framing rule);fetch.response-truncated|8|never|the connection ended before the response was complete";
 }
 
 pub fn flag_table() -> [] &static [byte] {
@@ -37,7 +37,7 @@ pub fn flag_table() -> [] &static [byte] {
 }
 
 pub fn tool() -> [] describe.Tool {
-    return describe.Tool { name: "fetch", version: "0.1.0", summary: "Send one HTTP GET, HEAD or POST request to a host this build was given, and answer the status, the headers and the body. The hosts are in the binary and in its authority row; a request for any other host is refused before a socket opens. No redirects, credentials or cookies.", usage: "fetch [--host H] [--max-bytes N] [--timeout-ms N] [--accept TEXT] [--body TEXT --content-type TYPE] [--max-redirects N] [--format json|text] METHOD PATH", output: "document", schema: "fetch.v1", flags: flag_table(), operands: "METHOD|name|1|1|get, head or post;PATH|text|1|1|the request target: a path beginning with a single /, optionally with a query", rules: "args.unknown-flag;args.missing-value;args.bad-value;args.unexpected-value;args.duplicate-flag;args.missing-operand;args.too-many-operands;fetch.method;fetch.redirect-not-allowed;fetch.redirect-limit;fetch.tls;fetch.body-required;fetch.body-not-allowed;fetch.request-body-too-large;fetch.url-not-a-path;fetch.path-malformed;fetch.host-not-allowed;fetch.host-required;fetch.header-malformed;fetch.connect-failed;fetch.peer-not-public;fetch.timeout;fetch.body-too-large;fetch.response-malformed;fetch.response-truncated", extra_rules: extra(), limits: "max-bytes|1048576|16777216;timeout-ms|10000|60000;max-redirects|0|5", reversibility: "irreversible-consequential", stdin: "no", guarantees: "bounded_memory" };
+    return describe.Tool { name: "fetch", version: "0.1.0", summary: "Send one HTTP GET, HEAD or POST request to a host this build was given, and answer the status, the headers and the body. The hosts are in the binary and in its authority row; a request for any other host is refused before a socket opens. No redirects, credentials or cookies.", usage: "fetch [--host H] [--max-bytes N] [--timeout-ms N] [--accept TEXT] [--body TEXT --content-type TYPE] [--max-redirects N] [--format json|text] METHOD PATH", output: "document", schema: "fetch.v1", flags: flag_table(), operands: "METHOD|name|1|1|get, head or post;PATH|text|1|1|the request target: a path beginning with a single /, optionally with a query", rules: "args.unknown-flag;args.missing-value;args.bad-value;args.unexpected-value;args.duplicate-flag;args.missing-operand;args.too-many-operands;fetch.method;fetch.redirect-not-allowed;fetch.redirect-limit;fetch.credential-unavailable;fetch.tls;fetch.body-required;fetch.body-not-allowed;fetch.request-body-too-large;fetch.url-not-a-path;fetch.path-malformed;fetch.host-not-allowed;fetch.host-required;fetch.header-malformed;fetch.connect-failed;fetch.peer-not-public;fetch.timeout;fetch.body-too-large;fetch.response-malformed;fetch.response-truncated", extra_rules: extra(), limits: "max-bytes|1048576|16777216;timeout-ms|10000|60000;max-redirects|0|5", reversibility: "irreversible-consequential", stdin: "no", guarantees: "bounded_memory" };
 }
 
 pub fn built() -> [] describe.Built {
@@ -706,6 +706,59 @@ pub fn replace[&h](heap: &!h Heap, old: Answer, fresh: Answer) -> [heap] Answer 
     return fresh;
 }
 
+// `src` into `dst` from `at`: the new end (bytes that do not fit are not written; the caller checked the sizes).
+fn put_bytes[&d, &s](dst: &!d [byte], at: int, src: &s [byte]) -> [] int {
+    var i = 0;
+    while i < len(src) && at + i < len(dst) {
+        dst[at + i] = src[i];
+        i = i + 1;
+    }
+    return at + i;
+}
+
+// The length of a secret read into `token` as `got` bytes, without the line ending or blanks a file ends with; 0 when
+// nothing usable was read.
+pub fn secret_len[&t](token: &t [byte], got: int) -> [] int {
+    var n = got;
+    if n > len(token) {
+        n = len(token);
+    }
+    while n > 0 && (int_of(token[n - 1]) == 10 || int_of(token[n - 1]) == 13 || int_of(token[n - 1]) == 32 || int_of(token[n - 1]) == 9) {
+        n = n - 1;
+    }
+    if n < 0 {
+        return 0;
+    }
+    return n;
+}
+
+// A token is visible ASCII with no blank: what can be sent as a header value without being able to end the line.
+pub fn secret_ok[&t](token: &t [byte]) -> [] bool {
+    if len(token) == 0 {
+        return false;
+    }
+    var i = 0;
+    while i < len(token) {
+        let c = int_of(token[i]);
+        if c < 33 || c > 126 {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// The answer when a credential cannot be used: nothing was dialed. The path is the operator's, the secret is never named.
+pub fn credential_unavailable[&h, &p](heap: &!h Heap, path: &p [byte]) -> [heap] Answer {
+    var w = fail.open_in(heap, extra(), "fetch.credential-unavailable", "the credential this build holds for the host could not be read, or is not a token (visible ASCII, no blank)", "this is the operator's configuration (detail.path names the file); retrying or changing the request does not help");
+    w = fail.no_repair(heap, w);
+    w = fail.detail_open(heap, w);
+    w = json.put_key(heap, w, "path");
+    w = json.put_string(heap, w, path);
+    let e = fail.add(heap, fail.empty_in(heap, extra()), w);
+    return Answer { faults: e, payload: buffer.empty(heap, 1), shown: buffer.empty(heap, 1), to_path: buffer.empty(heap, 1), follow: 0 - 1, code: 0, took: 0 };
+}
+
 // The error of a transport call that did not succeed: -1 the deadline, -999 the TLS engine (its tag says why), -998 no
 // trust roots or entropy, 1 or more an errno of a write, -2 or less an errno of a read, -3 a request that did not fit.
 fn transport_error[&h, &n](heap: &!h Heap, e: fail.Errors, code: int, engine: &n tls.Engine, timeout: int) -> [heap] fail.Errors {
@@ -748,7 +801,7 @@ pub struct Answer {
 }
 
 // The envelope's data for a completed exchange.
-fn data[&h, &p, &a, &r, &x, &b, &q](heap: &!h Heap, plan: &p Plan, authority: &a [byte], secure: bool, status: int, reason: &r buffer.Buffer, headers: &x buffer.Buffer, body: &b buffer.Buffer, peer: &q buffer.Buffer, millis: int) -> [heap] buffer.Buffer {
+fn data[&h, &p, &a, &r, &x, &b, &q](heap: &!h Heap, plan: &p Plan, authority: &a [byte], secure: bool, credentialed: bool, status: int, reason: &r buffer.Buffer, headers: &x buffer.Buffer, body: &b buffer.Buffer, peer: &q buffer.Buffer, millis: int) -> [heap] buffer.Buffer {
     var w = json.begin_object(heap, json.writer(heap, 512));
     w = json.put_key(heap, w, "method");
     if plan.head {
@@ -764,6 +817,8 @@ fn data[&h, &p, &a, &r, &x, &b, &q](heap: &!h Heap, plan: &p Plan, authority: &a
     } else {
         w = json.put_string(heap, w, "http");
     }
+    w = json.put_key(heap, w, "credentialed");
+    w = json.put_bool(heap, w, credentialed);
     w = json.put_key(heap, w, "host");
     w = json.put_string(heap, w, authority);
     w = json.put_key(heap, w, "path");
@@ -797,7 +852,7 @@ fn data[&h, &p, &a, &r, &x, &b, &q](heap: &!h Heap, plan: &p Plan, authority: &a
 // Send the request over `conn`, read the response, close the connection. `authority` is the baked entry's `host[:port]`;
 // `allow_private` says whether a loopback, private or link-local peer may be talked to. Answers the errors, the
 // envelope's data, and (for `--format text`) the body.
-pub fn exchange[&h, &k, &p, &a, &l, &m, &o, &y](heap: &!h Heap, clock: &k Clock, conn: Conn, plan: &p Plan, authority: &a [byte], hosts: &l [byte], allow_private: bool, secure: bool, name: &m [byte], roots: &o [byte], entropy: &y [byte]) -> [heap, clock, poll] Answer {
+pub fn exchange[&h, &k, &p, &a, &l, &m, &o, &y, &t, &u](heap: &!h Heap, clock: &k Clock, conn: Conn, plan: &p Plan, authority: &a [byte], hosts: &l [byte], allow_private: bool, secure: bool, name: &m [byte], roots: &o [byte], entropy: &y [byte], credential: &t [byte], cred_header: &u [byte]) -> [heap, clock, poll] Answer {
     var e = fail.empty_in(heap, extra());
     var payload = buffer.empty(heap, 1);
     var shown = buffer.empty(heap, 1);
@@ -889,9 +944,29 @@ pub fn exchange[&h, &k, &p, &a, &l, &m, &o, &y](heap: &!h Heap, clock: &k Clock,
                     framing = len(sending);
                 }
                 let target = buffer.bytes(plan.path);
-                var all_extra = buffer.append(heap, buffer.empty(heap, 128), buffer.bytes(plan.extra_headers));
-                if plan.post {
-                    all_extra = buffer.append(heap, all_extra, buffer.bytes(plan.content_type));
+                // The extra header lines, in a region array and not a heap buffer: a credential among them is erased after the
+                // request is written (as far as the language allows: there is no guaranteed erasure).
+                let xbuf = alloc_slice[r](8192, byte_of(0));
+                var xn = 0;
+                var fits = true;
+                let own = buffer.bytes(plan.extra_headers);
+                let ctype = buffer.bytes(plan.content_type);
+                if len(own) + len(ctype) + len(cred_header) + len(credential) + 16 > 8192 {
+                    fits = false;
+                } else {
+                    xn = put_bytes(xbuf, xn, own);
+                    if plan.post {
+                        xn = put_bytes(xbuf, xn, ctype);
+                    }
+                    if len(credential) > 0 {
+                        xn = put_bytes(xbuf, xn, cred_header);
+                        xn = put_bytes(xbuf, xn, ": ");
+                        if bytes.equal(cred_header, "Authorization") {
+                            xn = put_bytes(xbuf, xn, "Bearer ");
+                        }
+                        xn = put_bytes(xbuf, xn, credential);
+                        xn = put_bytes(xbuf, xn, "\r\n");
+                    }
                 }
                 var sent = 0 - 3;
                 if secure {
@@ -918,8 +993,8 @@ pub fn exchange[&h, &k, &p, &a, &l, &m, &o, &y](heap: &!h Heap, clock: &k Clock,
                 }
                 if sent == 0 {
                     sent = 0 - 3;
-                    borrow all_extra as &ae in {
-                        let size = http_client_wire.write_head(req, method, target, authority, buffer.bytes(ae), framing, false, true);
+                    if fits {
+                        let size = http_client_wire.write_head(req, method, target, authority, xbuf[0..xn], framing, false, true);
                         if size >= 0 {
                             borrow mut c as &!cm in {
                                 borrow mut poller as &!pm in {
@@ -941,7 +1016,8 @@ pub fn exchange[&h, &k, &p, &a, &l, &m, &o, &y](heap: &!h Heap, clock: &k Clock,
                         }
                     }
                 }
-                buffer.drop(heap, all_extra);
+                bytes.zero(xbuf);
+                bytes.zero(req);
                 var filled = 0;
                 var head_done = false;
                 var phase = 0;
@@ -1129,7 +1205,7 @@ pub fn exchange[&h, &k, &p, &a, &l, &m, &o, &y](heap: &!h Heap, clock: &k Clock,
             borrow shown_headers as &hb in {
                 borrow body as &bb in {
                     borrow peer_text as &pb in {
-                        payload = data(heap, plan, authority, secure, status_code, rb, hb, bb, pb, millis);
+                        payload = data(heap, plan, authority, secure, len(credential) > 0, status_code, rb, hb, bb, pb, millis);
                     }
                 }
             }

@@ -144,6 +144,29 @@ def baked_hosts():
     return out
 
 
+def declared_credentials():
+    """`{path: (host:port, header)}` from generated/fetch/fetch.cho's credentials(): the files this build reads a token from."""
+    text = (ROOT / "generated" / "fetch" / "fetch.cho").read_text()
+    if "fn credentials()" not in text:
+        return {}
+    start = text.index("fn credentials()")
+    literal_ = text[text.index('return "', start) + 8:text.index('";', start)]
+    out = {}
+    for item in literal_.split(";"):
+        if not item:
+            continue
+        host, _, rest = item.partition("=")
+        path, _, header = rest.partition(",")
+        out[path] = (host, header)
+    return out
+
+
+def baked_entries():
+    text = (ROOT / "generated" / "fetch" / "fetch.cho").read_text()
+    start = text.index("fn hosts()")
+    return text[text.index('return "', start) + 8:text.index('";', start)].split(";")
+
+
 def baked_https():
     """Whether any baked entry is `https://`: only then may the tool read the entropy for its TLS seed."""
     text = (ROOT / "generated" / "fetch" / "fetch.cho").read_text()
@@ -171,9 +194,18 @@ def gate(tool, authority, ceilings):
     derived = {l["argument"] for l in authority["labels"] if l["name"] == "net_out"}
     if ceiling.get("net_out") == "baked" and derived != baked_hosts():
         problems.append("%s: net_out is %s but the baked hosts are %s" % (tool, sorted(derived), sorted(baked_hosts())))
+    derived_reads = {l["argument"] for l in authority["labels"] if l["name"] == "fs_read"}
+    for path in declared_credentials():
+        if path not in derived_reads:
+            problems.append("%s: the credential file %s is declared but the row does not read it" % (tool, path))
     for label in authority["labels"]:
         text = label_text(label)
         if label["name"] == "net_out" and ceiling.get("net_out") == "baked":
+            continue
+        if label["name"] == "fs_read" and label["argument"] in declared_credentials():
+            host = declared_credentials()[label["argument"]][0]
+            if host not in baked_hosts() or not any(h.startswith("https://") and (h.split("://", 1)[1] + ("" if ":" in h.split("://", 1)[1] else ":443")) == host for h in baked_entries()):
+                problems.append("%s: the credential file %s is for %s, which is not a baked https:// host" % (tool, label["argument"], host))
             continue
         if text == 'fs_read("/dev/urandom")' and ceiling.get("seed") == "https-only":
             if not baked_https():

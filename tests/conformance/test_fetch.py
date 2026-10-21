@@ -23,11 +23,18 @@ DEAD = 18081  # baked, and nothing listens (unless a test starts a server there)
 TLS_OK = 18443      # https://localhost, a certificate for localhost from the trusted authority
 TLS_NAME = 18444    # a certificate from the trusted authority for another name
 TLS_CA = 18445      # a certificate for localhost from an authority that is not trusted
+TLS_TWO = 18446     # a second good https host, with its own credential
 TMP = pathlib.Path(tempfile.mkdtemp(prefix="fetch-test-"))
 ENTRIES = ["http://127.0.0.1:%d" % PORT, "http://127.0.0.1:%d" % DEAD, "https://localhost:%d" % TLS_OK,
-           "https://localhost:%d" % TLS_NAME, "https://localhost:%d" % TLS_CA]
-ALLOWED = ["127.0.0.1:%d" % PORT, "127.0.0.1:%d" % DEAD, "localhost:%d" % TLS_OK, "localhost:%d" % TLS_NAME, "localhost:%d" % TLS_CA]
+           "https://localhost:%d" % TLS_NAME, "https://localhost:%d" % TLS_CA, "https://localhost:%d" % TLS_TWO]
+ALLOWED = ["127.0.0.1:%d" % PORT, "127.0.0.1:%d" % DEAD, "localhost:%d" % TLS_OK, "localhost:%d" % TLS_NAME, "localhost:%d" % TLS_CA,
+           "localhost:%d" % TLS_TWO]
 HOSTS = [x for e in ENTRIES for x in ("--host", e)]
+TOKEN_ONE = TMP / "token-one"   # the credential of TLS_OK: Authorization: Bearer
+TOKEN_TWO = TMP / "token-two"   # the credential of TLS_TWO: X-Api-Key
+SECRET_ONE = "tok-one-secret-7f3a"
+SECRET_TWO = "tok-two-secret-91bd"
+CREDENTIALS = ["--credential", "localhost:%d=%s" % (TLS_OK, TOKEN_ONE), "--credential", "localhost:%d=%s,X-Api-Key" % (TLS_TWO, TOKEN_TWO)]
 
 
 def make_certificates(where):
@@ -62,7 +69,7 @@ CONTEXTS = None
 
 
 def build(name, *extra):
-    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "fetch_build.py"), *HOSTS, "--roots", ROOTS, *extra],
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "fetch_build.py"), *HOSTS, "--roots", ROOTS, *CREDENTIALS, *extra],
                        cwd=ROOT, capture_output=True, text=True, timeout=600)
     if r.returncode != 0:
         raise RuntimeError("build failed:\n" + r.stdout + r.stderr)
@@ -77,6 +84,8 @@ OPEN = STRICT = None
 def setUpModule():
     global OPEN, STRICT, ROOTS, CONTEXTS
     ROOTS, CONTEXTS = make_certificates(TMP)
+    TOKEN_ONE.write_text(SECRET_ONE + "\n")  # a file ends with a newline; the token does not
+    TOKEN_TWO.write_text(SECRET_TWO)
     STRICT = build("strict")
     OPEN = build("open", "--allow-private")
 
@@ -494,6 +503,88 @@ class Fetch(unittest.TestCase):
             s.close()
             time.sleep(0.05)
 
+    # ---- credentials: a file named at build time, for one https host, sent to that host and no other
+    def sent(self, server):
+        return [r for r in server.requests if r]
+
+    def test_a_credential_goes_to_its_host_as_a_bearer_token_and_nowhere_else_in_the_output(self):
+        s = self.tls_server("good", TLS_OK)
+        r = subprocess.run([OPEN, "--host", "localhost:%d" % TLS_OK, "get", "/private"], capture_output=True, text=True, timeout=30)
+        doc = json.loads(r.stdout)
+        self.assertEqual((r.returncode, doc["data"]["credentialed"], doc["data"]["status"]), (0, True, 200))
+        self.assertIn(b"\r\nAuthorization: Bearer %s\r\n" % SECRET_ONE.encode(), self.sent(s)[0])
+        self.assertNotIn(SECRET_ONE, r.stdout + r.stderr)  # the caller never sees it
+
+    def test_a_credential_can_be_another_header(self):
+        s = self.tls_server("good", TLS_TWO)
+        rc, doc, _ = run(OPEN, "--host", "localhost:%d" % TLS_TWO, "get", "/")
+        self.assertEqual((rc, doc["data"]["credentialed"]), (0, True))
+        req = self.sent(s)[0]
+        self.assertIn(b"\r\nX-Api-Key: %s\r\n" % SECRET_TWO.encode(), req)
+        self.assertNotIn(b"Authorization", req)
+
+    def test_a_host_without_a_credential_is_sent_none(self):
+        s = self.serve(lambda req: ok())
+        rc, doc, _ = run(OPEN, "get", "/")
+        self.assertEqual((doc["data"]["credentialed"], b"Authorization" in self.sent(s)[0], b"X-Api-Key" in self.sent(s)[0]), (False, False, False))
+
+    def test_a_redirect_never_carries_the_credential_to_another_host(self):
+        first = self.tls_server("good", TLS_OK, self.hop("http://127.0.0.1:%d/plain" % PORT))
+        second = self.serve(lambda req: ok(b"landed"))
+        rc, doc, _ = run(OPEN, "--host", "localhost:%d" % TLS_OK, "--max-redirects", "1", "get", "/")
+        self.assertEqual((doc["ok"], doc["data"]["body"]), (True, "landed"), doc)
+        self.assertIn(SECRET_ONE.encode(), self.sent(first)[0])
+        self.assertNotIn(SECRET_ONE.encode(), self.sent(second)[0])
+        self.assertNotIn(b"Authorization", self.sent(second)[0])
+
+    def test_a_redirect_to_another_credentialed_host_uses_that_hosts_own(self):
+        first = self.tls_server("good", TLS_OK, self.hop("https://localhost:%d/two" % TLS_TWO))
+        second = self.tls_server("good", TLS_TWO)
+        rc, doc, _ = run(OPEN, "--host", "localhost:%d" % TLS_OK, "--max-redirects", "1", "get", "/")
+        self.assertEqual(doc["ok"], True, doc)
+        self.assertIn(SECRET_TWO.encode(), self.sent(second)[0])
+        self.assertNotIn(SECRET_ONE.encode(), self.sent(second)[0])
+        self.assertNotIn(SECRET_TWO.encode(), self.sent(first)[0])
+
+    def test_an_unreadable_or_malformed_credential_stops_before_any_connection(self):
+        s = self.tls_server("good", TLS_OK)
+        keep = TOKEN_ONE.read_text()
+        self.addCleanup(TOKEN_ONE.write_text, keep)
+        TOKEN_ONE.unlink()
+        rc, doc, _ = run(OPEN, "--host", "localhost:%d" % TLS_OK, "get", "/")
+        self.assertEqual((rc, self.rule(doc)), (8, "fetch.credential-unavailable"))
+        self.assertEqual(doc["error"]["detail"]["path"], str(TOKEN_ONE))
+        for bad in ("", "\n", "two words", "tab\there", "ctl\x01char", "caf\u00e9"):
+            TOKEN_ONE.write_text(bad)
+            rc, doc, _ = run(OPEN, "--host", "localhost:%d" % TLS_OK, "get", "/")
+            self.assertEqual(self.rule(doc), "fetch.credential-unavailable", repr(bad))
+        self.assertEqual(self.sent(s), [])
+        self.assertNotIn(SECRET_ONE, json.dumps(doc))
+
+    def test_the_secret_is_not_in_introspect_or_the_skill(self):
+        for word in ("introspect", "skill"):
+            r = subprocess.run([OPEN, word], capture_output=True, text=True, timeout=30)
+            self.assertNotIn(SECRET_ONE, r.stdout)
+            self.assertNotIn(SECRET_TWO, r.stdout)
+
+    def test_the_generator_refuses_a_credential_it_cannot_keep_apart(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import fetch_build
+        entries = ["http://127.0.0.1:1", "https://a.example", "https://b.example:8443"]
+        ok_spec = fetch_build.parse_credentials(entries, ["a.example=/run/secrets/a", "b.example:8443=/run/secrets/b,X-Key"])
+        self.assertEqual(ok_spec, {1: ("/run/secrets/a", "Authorization"), 2: ("/run/secrets/b", "X-Key")})
+        for spec in ("127.0.0.1:1=/run/secrets/a",          # a plain http host
+                     "c.example=/run/secrets/a",            # no such host
+                     "a.example=relative/path",             # not absolute
+                     "a.example=/run/../etc/passwd",        # a dot-dot
+                     "a.example=/run/secrets/a,Cookie",     # a header a credential cannot be
+                     "a.example=/run/secrets/a,Bad Header", # not a header name
+                     "a.example", "a.example=", "=/x"):
+            with self.assertRaises(SystemExit, msg=spec):
+                fetch_build.parse_credentials(entries, [spec])
+        with self.assertRaises(SystemExit):
+            fetch_build.parse_credentials(entries, ["a.example=/x", "a.example=/y"])
+
     def test_header_injection_is_refused(self):
         s = self.serve(lambda req: ok())
         rc, doc, _ = run(OPEN, "--accept", "text/plain\r\nX-Evil: 1", "get", "/")
@@ -526,7 +617,7 @@ class Fetch(unittest.TestCase):
         rc, doc, _ = run(STRICT, "introspect")
         rows = {(l["name"], l["argument"]) for l in doc["authority"]["labels"]}
         self.assertEqual({r[1] for r in rows if r[0] == "net_out"}, set(ALLOWED))
-        self.assertEqual({r[1] for r in rows if r[0] == "fs_read"}, {"/dev/urandom"})  # the TLS seed, and nothing else
+        self.assertEqual({r[1] for r in rows if r[0] == "fs_read"}, {"/dev/urandom", str(TOKEN_ONE), str(TOKEN_TWO)})  # the seed and the two declared credentials
         names = {r[0] for r in rows}
         self.assertFalse(names & {"ffi", "net_in", "file_write", "dir_write", "exec"}, names)
         self.assertTrue(doc["authority"]["bounded"])
