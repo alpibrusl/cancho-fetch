@@ -4,6 +4,7 @@ edition 11;
 // literal, so each one has its own function; everything else is tools/fetch/fetchcore.cho.
 
 import std.buffer;
+import std.bytes;
 import std.io;
 import toolbox.cli;
 import toolbox.describe;
@@ -17,6 +18,10 @@ fn roots() -> [] &static [byte] {
     return "";
 }
 
+fn credentials() -> [] &static [byte] {
+    return "";
+}
+
 fn private_ok() -> [] bool {
     return true;
 }
@@ -24,7 +29,7 @@ fn private_ok() -> [] bool {
 fn via_0[&h, &k, &o, &p, &y](heap: &!h Heap, clock: &k Clock, out: &o Out("127.0.0.1:18080"), plan: &p fetchcore.Plan, entropy: &y [byte]) -> [heap, clock, poll, net_out("127.0.0.1:18080")] fetchcore.Answer {
     match tcp_connect(out, fetchcore.dial_host(hosts(), 0), fetchcore.dial_port(hosts(), 0)) {
         Dialed::Ok(conn) => {
-            return fetchcore.exchange(heap, clock, conn, plan, fetchcore.authority(hosts(), 0), hosts(), private_ok(), fetchcore.entry_secure(hosts(), 0), fetchcore.dial_host(hosts(), 0), roots(), entropy);
+            return fetchcore.exchange(heap, clock, conn, plan, fetchcore.authority(hosts(), 0), hosts(), private_ok(), fetchcore.entry_secure(hosts(), 0), fetchcore.dial_host(hosts(), 0), roots(), entropy, "", "");
         }
         Dialed::Failed(errno) => {
             return fetchcore.dial_failed(heap, errno);
@@ -35,7 +40,7 @@ fn via_0[&h, &k, &o, &p, &y](heap: &!h Heap, clock: &k Clock, out: &o Out("127.0
 fn via_1[&h, &k, &o, &p, &y](heap: &!h Heap, clock: &k Clock, out: &o Out("127.0.0.1:18081"), plan: &p fetchcore.Plan, entropy: &y [byte]) -> [heap, clock, poll, net_out("127.0.0.1:18081")] fetchcore.Answer {
     match tcp_connect(out, fetchcore.dial_host(hosts(), 1), fetchcore.dial_port(hosts(), 1)) {
         Dialed::Ok(conn) => {
-            return fetchcore.exchange(heap, clock, conn, plan, fetchcore.authority(hosts(), 1), hosts(), private_ok(), fetchcore.entry_secure(hosts(), 1), fetchcore.dial_host(hosts(), 1), roots(), entropy);
+            return fetchcore.exchange(heap, clock, conn, plan, fetchcore.authority(hosts(), 1), hosts(), private_ok(), fetchcore.entry_secure(hosts(), 1), fetchcore.dial_host(hosts(), 1), roots(), entropy, "", "");
         }
         Dialed::Failed(errno) => {
             return fetchcore.dial_failed(heap, errno);
