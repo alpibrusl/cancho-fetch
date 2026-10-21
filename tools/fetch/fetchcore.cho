@@ -26,15 +26,15 @@ import toolbox.text;
 import http_client_wire;
 
 pub fn extra() -> [] &static [byte] {
-    return "fetch.method|2|never|the METHOD is not one this tool sends (get, head, post);fetch.body-required|2|never|post needs --body and --content-type;fetch.body-not-allowed|2|never|--body and --content-type belong to post;fetch.request-body-too-large|2|never|--body is larger than the 65536 bytes this tool sends;fetch.url-not-a-path|2|never|PATH is a request target (it begins with a single /), not a URL;fetch.path-malformed|2|never|PATH has a byte a request target may not hold;fetch.host-not-allowed|2|sometimes|--host names no host this build was given;fetch.host-required|2|sometimes|more than one host was baked in and --host was not given;fetch.header-malformed|2|never|--accept holds a byte a header value may not hold;fetch.connect-failed|8|never|the connection could not be made;fetch.peer-not-public|8|never|the host resolved to a private, loopback or link-local address and this build does not allow it;fetch.timeout|8|never|the deadline passed before the response was complete;fetch.body-too-large|8|never|the response body is larger than --max-bytes;fetch.response-malformed|8|never|the response is not one this tool reads (the detail names the framing rule);fetch.response-truncated|8|never|the connection ended before the response was complete";
+    return "fetch.method|2|never|the METHOD is not one this tool sends (get, head, post);fetch.redirect-not-allowed|2|never|a redirect points somewhere this build was not given;fetch.redirect-limit|8|never|more redirects than --max-redirects;fetch.body-required|2|never|post needs --body and --content-type;fetch.body-not-allowed|2|never|--body and --content-type belong to post;fetch.request-body-too-large|2|never|--body is larger than the 65536 bytes this tool sends;fetch.url-not-a-path|2|never|PATH is a request target (it begins with a single /), not a URL;fetch.path-malformed|2|never|PATH has a byte a request target may not hold;fetch.host-not-allowed|2|sometimes|--host names no host this build was given;fetch.host-required|2|sometimes|more than one host was baked in and --host was not given;fetch.header-malformed|2|never|--accept holds a byte a header value may not hold;fetch.connect-failed|8|never|the connection could not be made;fetch.peer-not-public|8|never|the host resolved to a private, loopback or link-local address and this build does not allow it;fetch.timeout|8|never|the deadline passed before the response was complete;fetch.body-too-large|8|never|the response body is larger than --max-bytes;fetch.response-malformed|8|never|the response is not one this tool reads (the detail names the framing rule);fetch.response-truncated|8|never|the connection ended before the response was complete";
 }
 
 pub fn flag_table() -> [] &static [byte] {
-    return "host||text|none||which baked host to use: the host (or host:port) of one of this build's allowed entries, required when more than one is baked in;max-bytes||nat|none|1048576|the most response body bytes accepted (1 to 16777216), a larger body is fetch.body-too-large;timeout-ms||nat|none|10000|the deadline for the whole request once the name has resolved, in milliseconds (1 to 60000);accept||text|none||the Accept request header;body||text|none||the request body, for post (at most 65536 bytes);content-type||text|none||the Content-Type of the request body, required with --body;format||choice:json/text|none|json|json for an envelope, text writes the response body to standard output";
+    return "host||text|none||which baked host to use: the host (or host:port) of one of this build's allowed entries, required when more than one is baked in;max-bytes||nat|none|1048576|the most response body bytes accepted (1 to 16777216), a larger body is fetch.body-too-large;timeout-ms||nat|none|10000|the deadline for the whole request once the name has resolved, in milliseconds (1 to 60000);accept||text|none||the Accept request header;body||text|none||the request body, for post (at most 65536 bytes);content-type||text|none||the Content-Type of the request body, required with --body;max-redirects||nat|none|0|how many redirects to follow (0 to 5), only to a host this build was given, a 3xx is otherwise the answer;format||choice:json/text|none|json|json for an envelope, text writes the response body to standard output";
 }
 
 pub fn tool() -> [] describe.Tool {
-    return describe.Tool { name: "fetch", version: "0.1.0", summary: "Send one HTTP GET, HEAD or POST request to a host this build was given, and answer the status, the headers and the body. The hosts are in the binary and in its authority row; a request for any other host is refused before a socket opens. No redirects, credentials or cookies.", usage: "fetch [--host H] [--max-bytes N] [--timeout-ms N] [--accept TEXT] [--body TEXT --content-type TYPE] [--format json|text] METHOD PATH", output: "document", schema: "fetch.v1", flags: flag_table(), operands: "METHOD|name|1|1|get, head or post;PATH|text|1|1|the request target: a path beginning with a single /, optionally with a query", rules: "args.unknown-flag;args.missing-value;args.bad-value;args.unexpected-value;args.duplicate-flag;args.missing-operand;args.too-many-operands;fetch.method;fetch.body-required;fetch.body-not-allowed;fetch.request-body-too-large;fetch.url-not-a-path;fetch.path-malformed;fetch.host-not-allowed;fetch.host-required;fetch.header-malformed;fetch.connect-failed;fetch.peer-not-public;fetch.timeout;fetch.body-too-large;fetch.response-malformed;fetch.response-truncated", extra_rules: extra(), limits: "max-bytes|1048576|16777216;timeout-ms|10000|60000", reversibility: "irreversible-consequential", stdin: "no", guarantees: "bounded_memory" };
+    return describe.Tool { name: "fetch", version: "0.1.0", summary: "Send one HTTP GET, HEAD or POST request to a host this build was given, and answer the status, the headers and the body. The hosts are in the binary and in its authority row; a request for any other host is refused before a socket opens. No redirects, credentials or cookies.", usage: "fetch [--host H] [--max-bytes N] [--timeout-ms N] [--accept TEXT] [--body TEXT --content-type TYPE] [--max-redirects N] [--format json|text] METHOD PATH", output: "document", schema: "fetch.v1", flags: flag_table(), operands: "METHOD|name|1|1|get, head or post;PATH|text|1|1|the request target: a path beginning with a single /, optionally with a query", rules: "args.unknown-flag;args.missing-value;args.bad-value;args.unexpected-value;args.duplicate-flag;args.missing-operand;args.too-many-operands;fetch.method;fetch.redirect-not-allowed;fetch.redirect-limit;fetch.body-required;fetch.body-not-allowed;fetch.request-body-too-large;fetch.url-not-a-path;fetch.path-malformed;fetch.host-not-allowed;fetch.host-required;fetch.header-malformed;fetch.connect-failed;fetch.peer-not-public;fetch.timeout;fetch.body-too-large;fetch.response-malformed;fetch.response-truncated", extra_rules: extra(), limits: "max-bytes|1048576|16777216;timeout-ms|10000|60000;max-redirects|0|5", reversibility: "irreversible-consequential", stdin: "no", guarantees: "bounded_memory" };
 }
 
 pub fn built() -> [] describe.Built {
@@ -43,6 +43,10 @@ pub fn built() -> [] describe.Built {
 
 fn max_bytes_ceiling() -> [] int {
     return 16777216;
+}
+
+fn redirect_ceiling() -> [] int {
+    return 5;
 }
 
 fn request_body_ceiling() -> [] int {
@@ -150,11 +154,18 @@ pub struct Plan {
     max_bytes: int,
     timeout: int,
     text_mode: bool,
+    // The redirects asked for, and still allowed.
+    redirects_max: int,
+    redirects_left: int,
     // The request target, and the header lines to add (`Accept: ...\r\n`, or empty): copied out of the arguments.
     path: buffer.Buffer,
     extra_headers: buffer.Buffer,
+    // `Content-Type: ...\r\n` for a post, else empty.
+    content_type: buffer.Buffer,
     // The request body of a post, else empty.
     body: buffer.Buffer,
+    // The hops so far, as comma-separated JSON objects.
+    hops: buffer.Buffer,
     errors: fail.Errors,
 }
 
@@ -212,6 +223,8 @@ pub fn plan[&h, &g, &l](heap: &!h Heap, args: &g Args, hosts: &l [byte]) -> [hea
     var head = false;
     var post = false;
     var body = buffer.empty(heap, 1);
+    var content_type = buffer.empty(heap, 1);
+    var redirects = 0;
     var host = 0 - 1;
     var path = buffer.empty(heap, 64);
     var extra_headers = buffer.empty(heap, 64);
@@ -224,6 +237,10 @@ pub fn plan[&h, &g, &l](heap: &!h Heap, args: &g Args, hosts: &l [byte]) -> [hea
         timeout = cli.nat(args, p, table, "timeout-ms");
         if most < 1 || most > max_bytes_ceiling() {
             e = flag_problem(heap, e, "args.bad-value", "--max-bytes is from 1 to 16777216", "pass a cap in that range", "--max-bytes");
+        }
+        redirects = cli.nat(args, p, table, "max-redirects");
+        if redirects > redirect_ceiling() {
+            e = flag_problem(heap, e, "args.bad-value", "--max-redirects is from 0 to 5", "pass a count in that range", "--max-redirects");
         }
         if timeout < 1 || timeout > timeout_ceiling() {
             e = flag_problem(heap, e, "args.bad-value", "--timeout-ms is from 1 to 60000", "pass a deadline in that range", "--timeout-ms");
@@ -322,7 +339,7 @@ pub fn plan[&h, &g, &l](heap: &!h Heap, args: &g Args, hosts: &l [byte]) -> [hea
             borrow line as &ln in {
                 good = len(kind) > 0 && plain_value(kind) && http_client_wire.valid_extra(buffer.bytes(ln));
                 if good {
-                    extra_headers = buffer.append(heap, extra_headers, buffer.bytes(ln));
+                    content_type = buffer.append(heap, content_type, buffer.bytes(ln));
                 }
             }
             buffer.drop(heap, line);
@@ -350,7 +367,7 @@ pub fn plan[&h, &g, &l](heap: &!h Heap, args: &g Args, hosts: &l [byte]) -> [hea
         }
     }
     cli.drop(heap, parsed);
-    return Plan { host: host, head: head, post: post, max_bytes: most, timeout: timeout, text_mode: text_mode, path: path, extra_headers: extra_headers, body: body, errors: e };
+    return Plan { host: host, head: head, post: post, max_bytes: most, timeout: timeout, text_mode: text_mode, redirects_max: redirects, redirects_left: redirects, path: path, extra_headers: extra_headers, content_type: content_type, body: body, hops: buffer.empty(heap, 1), errors: e };
 }
 
 // Does the plan carry a refusal already?
@@ -363,8 +380,10 @@ pub fn host_of[&p](plan: &p Plan) -> [] int {
 }
 
 pub fn drop_plan[&h](heap: &!h Heap, plan: Plan) -> [heap] int {
-    let Plan { host, head, post, max_bytes, timeout, text_mode, path, extra_headers, body, errors } = plan;
+    let Plan { host, head, post, max_bytes, timeout, text_mode, redirects_max, redirects_left, path, extra_headers, content_type, body, hops, errors } = plan;
     buffer.drop(heap, body);
+    buffer.drop(heap, content_type);
+    buffer.drop(heap, hops);
     buffer.drop(heap, path);
     buffer.drop(heap, extra_headers);
     fail.drop(heap, errors);
@@ -590,12 +609,221 @@ fn simple_detail[&h](heap: &!h Heap, e: fail.Errors, rule: &static [byte], messa
     return fail.add(heap, e, w);
 }
 
+// ---------------------------------------------------------------- redirects ---
+//
+// A redirect is followed only to a host this build was given, by a path on it, and never "followed and then checked": the
+// target is checked before a socket is opened for it. The loop is in the generated main (each host has its own `Out`);
+// this module decides the target (`locate`, in `exchange`) and rebuilds the plan for it (`retarget`).
+
+fn is_redirect(code: int) -> [] bool {
+    return code == 301 || code == 302 || code == 303 || code == 307 || code == 308;
+}
+
+fn lower(c: int) -> [] int {
+    if c >= 'A' && c <= 'Z' {
+        return c + 32;
+    }
+    return c;
+}
+
+// `host[:port]` without a default port, so `h` and `h:80` are one authority.
+fn trim_default_port[&a](x: &a [byte]) -> [] &a [byte] {
+    let n = len(x);
+    if n > 3 && int_of(x[n - 3]) == ':' && int_of(x[n - 2]) == '8' && int_of(x[n - 1]) == '0' {
+        return x[0..n - 3];
+    }
+    return x;
+}
+
+fn same_authority[&a, &b](x: &a [byte], y: &b [byte]) -> [] bool {
+    let p = trim_default_port(x);
+    let q = trim_default_port(y);
+    if len(p) != len(q) {
+        return false;
+    }
+    var i = 0;
+    while i < len(p) {
+        if lower(int_of(p[i])) != lower(int_of(q[i])) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// The baked entry whose authority is `auth`, or -1.
+fn entry_for[&l, &a](hosts: &l [byte], auth: &a [byte]) -> [] int {
+    var k = 0;
+    while k < host_count(hosts) {
+        if same_authority(authority(hosts, k), auth) {
+            return k;
+        }
+        k = k + 1;
+    }
+    return 0 - 1;
+}
+
+pub struct Target {
+    faults: fail.Errors,
+    host: int,
+    path: buffer.Buffer,
+}
+
+// Where a `Location` goes: an absolute path on the same host, or `http://AUTHORITY/path` for a baked AUTHORITY. Anything
+// else is `fetch.redirect-not-allowed`, with the location and the reason, and nothing is sent.
+fn locate[&h, &p, &l, &x](heap: &!h Heap, e: fail.Errors, plan: &p Plan, hosts: &l [byte], loc: &x [byte]) -> [heap] Target {
+    var errors = e;
+    var host = plan.host;
+    var path = buffer.empty(heap, 64);
+    var rest = loc[0..0];
+    var reason = "";
+    var ok = false;
+    if bytes.starts_with(loc, "http://") {
+        let after = loc[7..len(loc)];
+        var end = 0;
+        while end < len(after) && int_of(after[end]) != '/' && int_of(after[end]) != '?' && int_of(after[end]) != '#' {
+            end = end + 1;
+        }
+        let k = entry_for(hosts, after[0..end]);
+        if k < 0 {
+            reason = "the host is not one this build was given";
+        } else {
+            host = k;
+            rest = after[end..len(after)];
+            ok = true;
+        }
+    } else if len(loc) > 0 && int_of(loc[0]) == '/' {
+        rest = loc;
+        ok = true;
+    } else {
+        reason = "only an absolute path or an http:// URL for a host this build was given is followed";
+    }
+    if ok {
+        var cut = len(rest);
+        var i = 0;
+        while i < len(rest) {
+            if int_of(rest[i]) == '#' {
+                cut = i;
+                i = len(rest);
+            }
+            i = i + 1;
+        }
+        let kept = rest[0..cut];
+        if len(kept) == 0 || int_of(kept[0]) == '?' {
+            path = buffer.push(heap, path, byte_of('/'));
+        }
+        path = buffer.append(heap, path, kept);
+        var good = false;
+        borrow path as &pb in {
+            good = is_target(buffer.bytes(pb));
+        }
+        if !good {
+            ok = false;
+            reason = "the path is not a request target this tool will send";
+        }
+    }
+    if !ok {
+        var w = fail.open_in(heap, extra(), "fetch.redirect-not-allowed", "the response redirects somewhere this build was not given, so it was not followed", "the redirect is not followed; fetch detail.location yourself if it is a host this build has, otherwise it is out of reach");
+        w = fail.no_repair(heap, w);
+        w = fail.detail_open(heap, w);
+        w = json.put_key(heap, w, "location");
+        w = text.put(heap, w, loc);
+        w = json.put_key(heap, w, "reason");
+        w = json.put_string(heap, w, reason);
+        errors = fail.add(heap, errors, w);
+        buffer.drop(heap, path);
+        return Target { faults: errors, host: 0 - 1, path: buffer.empty(heap, 1) };
+    }
+    return Target { faults: errors, host: host, path: path };
+}
+
+// The plan for the hop `answer` asked for. A 301, 302 or 303 turns a post into a get without its body; 307 and 308 keep
+// the method and the body. The hop is recorded for the envelope, and the deadline is what is left of the whole request.
+pub fn retarget[&h, &l](heap: &!h Heap, plan: Plan, answer: Answer, hosts: &l [byte]) -> [heap] Plan {
+    let Plan { host, head, post, max_bytes, timeout, text_mode, redirects_max, redirects_left, path, extra_headers, content_type, body, hops, errors } = plan;
+    let Answer { faults, payload, shown, to_path, follow, code, took } = answer;
+    var line = hops;
+    if redirects_max > redirects_left {
+        line = buffer.push(heap, line, byte_of(','));
+    }
+    let turns = post && code != 307 && code != 308;
+    var after = "get";
+    if head {
+        after = "head";
+    } else if post && !turns {
+        after = "post";
+    }
+    var w = json.begin_object(heap, json.writer(heap, 160));
+    w = json.put_key(heap, w, "status");
+    w = json.put_int(heap, w, code);
+    w = json.put_key(heap, w, "from");
+    w = json.put_string(heap, w, authority(hosts, host));
+    w = json.put_key(heap, w, "path");
+    borrow path as &old in {
+        w = json.put_string(heap, w, buffer.bytes(old));
+    }
+    w = json.put_key(heap, w, "to");
+    w = json.put_string(heap, w, authority(hosts, follow));
+    w = json.put_key(heap, w, "to_path");
+    borrow to_path as &new in {
+        w = json.put_string(heap, w, buffer.bytes(new));
+    }
+    w = json.put_key(heap, w, "method");
+    w = json.put_string(heap, w, after);
+    w = json.end_object(heap, w);
+    let frag = json.finish(w);
+    borrow frag as &fb in {
+        line = buffer.append(heap, line, buffer.bytes(fb));
+    }
+    buffer.drop(heap, frag);
+    var next_body = body;
+    var next_type = content_type;
+    if turns {
+        buffer.drop(heap, next_body);
+        buffer.drop(heap, next_type);
+        next_body = buffer.empty(heap, 1);
+        next_type = buffer.empty(heap, 1);
+    }
+    var left = timeout - took;
+    if left < 1 {
+        left = 1;
+    }
+    buffer.drop(heap, path);
+    buffer.drop(heap, payload);
+    buffer.drop(heap, shown);
+    fail.drop(heap, faults);
+    return Plan { host: follow, head: head, post: post && !turns, max_bytes: max_bytes, timeout: left, text_mode: text_mode, redirects_max: redirects_max, redirects_left: redirects_left - 1, path: to_path, extra_headers: extra_headers, content_type: next_type, body: next_body, hops: line, errors: errors };
+}
+
+pub fn follows[&a](answer: &a Answer) -> [] bool {
+    return answer.follow >= 0;
+}
+
+pub fn nothing[&h](heap: &!h Heap) -> [heap] Answer {
+    return Answer { faults: fail.empty_in(heap, extra()), payload: buffer.empty(heap, 1), shown: buffer.empty(heap, 1), to_path: buffer.empty(heap, 1), follow: 0 - 1, code: 0, took: 0 };
+}
+
+// `fresh` in place of `old`, which is freed.
+pub fn replace[&h](heap: &!h Heap, old: Answer, fresh: Answer) -> [heap] Answer {
+    let Answer { faults, payload, shown, to_path, follow, code, took } = old;
+    buffer.drop(heap, payload);
+    buffer.drop(heap, shown);
+    buffer.drop(heap, to_path);
+    fail.drop(heap, faults);
+    return fresh;
+}
+
 // ---------------------------------------------------------------- the exchange ---
 
 pub struct Answer {
-    errors: fail.Errors,
+    faults: fail.Errors,
     payload: buffer.Buffer,
     shown: buffer.Buffer,
+    // When the answer is a redirect to follow: the baked host to go to (else -1), the path there, and what it was.
+    to_path: buffer.Buffer,
+    follow: int,
+    code: int,
+    took: int,
 }
 
 // The envelope's data for a completed exchange.
@@ -623,6 +851,14 @@ fn data[&h, &p, &a, &r, &x, &b, &q](heap: &!h Heap, plan: &p Plan, authority: &a
     w = text.put(heap, w, buffer.bytes(body));
     w = json.put_key(heap, w, "body_bytes");
     w = json.put_int(heap, w, buffer.size(body));
+    w = json.put_key(heap, w, "redirects");
+    var chain = buffer.append(heap, buffer.empty(heap, 8), "[");
+    chain = buffer.append(heap, chain, buffer.bytes(plan.hops));
+    chain = buffer.append(heap, chain, "]");
+    borrow chain as &cb in {
+        w = json.put_fragment(heap, w, buffer.bytes(cb));
+    }
+    buffer.drop(heap, chain);
     w = json.put_key(heap, w, "peer");
     w = json.put_string(heap, w, buffer.bytes(peer));
     w = json.put_key(heap, w, "milliseconds");
@@ -634,7 +870,7 @@ fn data[&h, &p, &a, &r, &x, &b, &q](heap: &!h Heap, plan: &p Plan, authority: &a
 // Send the request over `conn`, read the response, close the connection. `authority` is the baked entry's `host[:port]`;
 // `allow_private` says whether a loopback, private or link-local peer may be talked to. Answers the errors, the
 // envelope's data, and (for `--format text`) the body.
-pub fn exchange[&h, &k, &p, &a](heap: &!h Heap, clock: &k Clock, conn: Conn, plan: &p Plan, authority: &a [byte], allow_private: bool) -> [heap, clock, poll] Answer {
+pub fn exchange[&h, &k, &p, &a, &l](heap: &!h Heap, clock: &k Clock, conn: Conn, plan: &p Plan, authority: &a [byte], hosts: &l [byte], allow_private: bool) -> [heap, clock, poll] Answer {
     var e = fail.empty_in(heap, extra());
     var payload = buffer.empty(heap, 1);
     var shown = buffer.empty(heap, 1);
@@ -642,6 +878,8 @@ pub fn exchange[&h, &k, &p, &a](heap: &!h Heap, clock: &k Clock, conn: Conn, pla
     let started = clock_ms(clock);
     let deadline = started + plan.timeout;
     var peer_text = buffer.empty(heap, 32);
+    var follow = 0 - 1;
+    var to_path = buffer.empty(heap, 1);
     var allowed = true;
     region r {
         // The peer first: a name that resolved to somewhere private is refused before a byte is sent.
@@ -679,7 +917,7 @@ pub fn exchange[&h, &k, &p, &a](heap: &!h Heap, clock: &k Clock, conn: Conn, pla
         e = fail.add(heap, e, w);
         conn_close(c);
         buffer.drop(heap, peer_text);
-        return Answer { errors: e, payload: payload, shown: shown };
+        return Answer { faults: e, payload: payload, shown: shown, to_path: to_path, follow: 0 - 1, code: 0, took: 0 };
     }
     borrow mut c as &!cn in {
         conn_nonblocking(cn);
@@ -719,21 +957,26 @@ pub fn exchange[&h, &k, &p, &a](heap: &!h Heap, clock: &k Clock, conn: Conn, pla
                 if plan.post {
                     framing = len(sending);
                 }
-                var sent = 0 - 3;
                 let target = buffer.bytes(plan.path);
-                let more = buffer.bytes(plan.extra_headers);
-                let size = http_client_wire.write_head(req, method, target, authority, more, framing, false, true);
+                var all_extra = buffer.append(heap, buffer.empty(heap, 128), buffer.bytes(plan.extra_headers));
+                if plan.post {
+                    all_extra = buffer.append(heap, all_extra, buffer.bytes(plan.content_type));
+                }
                 var sent = 0 - 3;
-                if size >= 0 {
-                    borrow mut c as &!cm in {
-                        borrow mut poller as &!pm in {
-                            sent = send_all(clock, pm, cm, events, req[0..size], deadline);
-                            if sent == 0 && len(sending) > 0 {
-                                sent = send_all(clock, pm, cm, events, sending, deadline);
+                borrow all_extra as &ae in {
+                    let size = http_client_wire.write_head(req, method, target, authority, buffer.bytes(ae), framing, false, true);
+                    if size >= 0 {
+                        borrow mut c as &!cm in {
+                            borrow mut poller as &!pm in {
+                                sent = send_all(clock, pm, cm, events, req[0..size], deadline);
+                                if sent == 0 && len(sending) > 0 {
+                                    sent = send_all(clock, pm, cm, events, sending, deadline);
+                                }
                             }
                         }
                     }
                 }
+                buffer.drop(heap, all_extra);
                 var filled = 0;
                 var head_done = false;
                 var phase = 0;
@@ -784,8 +1027,14 @@ pub fn exchange[&h, &k, &p, &a](heap: &!h Heap, clock: &k Clock, conn: Conn, pla
                     status_code = table[0];
                     reason = buffer.append(heap, reason, acc[table[6]..table[7]]);
                     var hw = json.begin_array(heap, json.writer(heap, 256));
+                    var loc_a = 0;
+                    var loc_z = 0;
                     var i = 0;
                     while i < table[2] {
+                        if http_client_wire.header_is(acc[0..body_start], table, i, "location") && loc_z == 0 {
+                            loc_a = table[16 + 4 * i + 2];
+                            loc_z = table[16 + 4 * i + 3];
+                        }
                         if shown_header(acc[0..body_start], table, i) {
                             hw = json.begin_object(heap, hw);
                             hw = json.put_key(heap, hw, "name");
@@ -814,6 +1063,21 @@ pub fn exchange[&h, &k, &p, &a](heap: &!h Heap, clock: &k Clock, conn: Conn, pla
                         }
                     }
                     if st[0] == mode_length() && st[1] == 0 {
+                        st[3] = 1;
+                    }
+                    // A redirect: followed when asked for and allowed, else the 3xx is the answer.
+                    if is_redirect(status_code) && loc_z > loc_a && plan.redirects_max > 0 {
+                        if plan.redirects_left == 0 {
+                            e = simple_detail(heap, e, "fetch.redirect-limit", "the response redirects again after --max-redirects were followed", "raise --max-redirects, up to 5, or fetch the final location yourself", "max_redirects", plan.redirects_max);
+                        } else {
+                            let target = locate(heap, e, plan, hosts, acc[loc_a..loc_z]);
+                            let Target { faults, host, path } = target;
+                            e = faults;
+                            follow = host;
+                            buffer.drop(heap, to_path);
+                            to_path = path;
+                        }
+                        st[0] = mode_none();
                         st[3] = 1;
                     }
                     // What followed the head in the same reads.
@@ -873,7 +1137,7 @@ pub fn exchange[&h, &k, &p, &a](heap: &!h Heap, clock: &k Clock, conn: Conn, pla
     borrow e as &er in {
         clean = fail.count(er) == 0;
     }
-    if clean {
+    if clean && follow < 0 {
         buffer.drop(heap, payload);
         borrow reason as &rb in {
             borrow shown_headers as &hb in {
@@ -892,7 +1156,7 @@ pub fn exchange[&h, &k, &p, &a](heap: &!h Heap, clock: &k Clock, conn: Conn, pla
     buffer.drop(heap, reason);
     buffer.drop(heap, shown_headers);
     buffer.drop(heap, peer_text);
-    return Answer { errors: e, payload: payload, shown: shown };
+    return Answer { faults: e, payload: payload, shown: shown, to_path: to_path, follow: follow, code: status_code, took: millis };
 }
 
 // ---------------------------------------------------------------- dialing and answering ---
@@ -928,22 +1192,23 @@ pub fn dial_port[&l](list: &l [byte], k: int) -> [] int {
 pub fn dial_failed[&h](heap: &!h Heap, errno: int) -> [heap] Answer {
     var e = fail.empty_in(heap, extra());
     e = simple_detail(heap, e, "fetch.connect-failed", "the connection could not be made", "the host refused or did not answer; check it is up and retry", "errno", errno);
-    return Answer { errors: e, payload: buffer.empty(heap, 1), shown: buffer.empty(heap, 1) };
+    return Answer { faults: e, payload: buffer.empty(heap, 1), shown: buffer.empty(heap, 1), to_path: buffer.empty(heap, 1), follow: 0 - 1, code: 0, took: 0 };
 }
 
 // Print the answer and free it. Exit status 0 for a response of any HTTP status.
 pub fn respond[&h, &i, &p](heap: &!h Heap, io: &!i Io, plan: &p Plan, answer: Answer) -> [heap, io_write, err_write] int {
-    let Answer { errors, payload, shown } = answer;
+    let Answer { faults, payload, shown, to_path, follow, code, took } = answer;
+    buffer.drop(heap, to_path);
     var status = 0;
     borrow payload as &d in {
         borrow shown as &t in {
-            borrow errors as &er in {
+            borrow faults as &er in {
                 status = out.respond(heap, io, "fetch", "fetch.v1", "0.1.0", buffer.bytes(d), "", er, plan.text_mode, buffer.bytes(t), 0);
             }
         }
     }
     buffer.drop(heap, payload);
     buffer.drop(heap, shown);
-    fail.drop(heap, errors);
+    fail.drop(heap, faults);
     return status;
 }

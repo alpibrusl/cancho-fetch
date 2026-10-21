@@ -48,13 +48,13 @@ def tearDownModule():
 class Server:
     """Answers each connection with `reply(request_bytes) -> bytes` (or None for silence), and records the requests."""
 
-    def __init__(self, reply, hold=0.0):
+    def __init__(self, reply, hold=0.0, port=PORT):
         self.reply = reply
         self.hold = hold
         self.requests = []
         self.sock = socket.socket()
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind(("127.0.0.1", PORT))
+        self.sock.bind(("127.0.0.1", port))
         self.sock.listen(8)
         self.stop = False
         self.thread = threading.Thread(target=self.loop, daemon=True)
@@ -124,6 +124,9 @@ class Fetch(unittest.TestCase):
         self.server = Server(reply, **kw)
         self.addCleanup(self.server.close)
         return self.server
+
+    def hop(self, location, code=302):
+        return lambda req: b"HTTP/1.1 %d Moved\r\nLocation: %s\r\nContent-Length: 0\r\n\r\n" % (code, location.encode())
 
     def rule(self, doc):
         self.assertFalse(doc["ok"], doc)
@@ -292,6 +295,84 @@ class Fetch(unittest.TestCase):
         self.assertEqual(self.rule(run(OPEN, "--body", "x", "--content-type", "a/b\r\nX-Evil: 1", "post", "/")[1]), "fetch.header-malformed")
         self.assertEqual(s.requests, [])
 
+    # ---- redirects: followed only to a host the build was given, and checked before a socket is opened
+    def test_follow_a_path_on_the_same_host(self):
+        def reply(req):
+            if req.startswith(b"GET /old"):
+                return b"HTTP/1.1 301 Moved\r\nLocation: /new?x=1#frag\r\nContent-Length: 0\r\n\r\n"
+            return ok(b"arrived")
+        s = self.serve(reply)
+        rc, doc, _ = run(OPEN, "--max-redirects", "2", "get", "/old")
+        d = doc["data"]
+        self.assertEqual((rc, d["status"], d["body"], d["path"]), (0, 200, "arrived", "/new?x=1"))
+        self.assertEqual(d["redirects"], [{"status": 301, "from": "127.0.0.1:%d" % PORT, "path": "/old", "to": "127.0.0.1:%d" % PORT, "to_path": "/new?x=1", "method": "get"}])
+        self.assertEqual(len(s.requests), 2)
+
+    def test_no_redirects_by_default_and_the_field_is_present(self):
+        s = self.serve(self.hop("/elsewhere"))
+        rc, doc, _ = run(OPEN, "get", "/")
+        self.assertEqual((doc["data"]["status"], doc["data"]["redirects"], len(s.requests)), (302, [], 1))
+
+    def test_follow_to_the_other_baked_host(self):
+        other = Server(lambda req: ok(b"from the other"), port=DEAD)
+        self.addCleanup(other.close)
+        self.serve(self.hop("http://127.0.0.1:%d/there" % DEAD, 307))
+        rc, doc, _ = run(OPEN, "--max-redirects", "1", "get", "/")
+        d = doc["data"]
+        self.assertEqual((rc, d["body"], d["host"], d["path"]), (0, "from the other", "127.0.0.1:%d" % DEAD, "/there"))
+        self.assertTrue(other.requests[0].startswith(b"GET /there HTTP/1.1"))
+        self.assertIn(b"Host: 127.0.0.1:%d\r\n" % DEAD, other.requests[0])
+
+    def test_redirects_to_places_not_given_are_refused_unsent(self):
+        other = Server(lambda req: ok(b"must not be reached"), port=DEAD)
+        self.addCleanup(other.close)
+        for location in ("http://example.com/x", "https://127.0.0.1:%d/x" % PORT, "next", "//127.0.0.1:%d/x" % DEAD,
+                         "http://127.0.0.1:%d@evil.example/" % PORT, "http://127.0.0.1:9/x", "ftp://x/"):
+            s = self.serve(self.hop(location))
+            rc, doc, _ = run(OPEN, "--max-redirects", "3", "get", "/")
+            self.assertEqual(self.rule(doc), "fetch.redirect-not-allowed", location)
+            self.assertEqual(doc["error"]["detail"]["location"], location)
+            self.assertEqual(len(s.requests), 1, location)
+            self.assertEqual(other.requests, [], location)
+            s.close()
+            time.sleep(0.05)
+
+    def test_redirect_limit(self):
+        s = self.serve(self.hop("/again"))
+        rc, doc, _ = run(OPEN, "--max-redirects", "2", "get", "/")
+        self.assertEqual((rc, self.rule(doc)), (8, "fetch.redirect-limit"))
+        self.assertEqual(len(s.requests), 3)
+
+    def test_302_turns_a_post_into_a_get_and_307_keeps_it(self):
+        def reply(req):
+            if req.startswith(b"POST /a"):
+                return b"HTTP/1.1 302 Found\r\nLocation: /b\r\nContent-Length: 0\r\n\r\n"
+            if req.startswith(b"POST /c"):
+                return b"HTTP/1.1 307 Temporary\r\nLocation: /d\r\nContent-Length: 0\r\n\r\n"
+            return ok(b"end")
+        s = self.serve(reply)
+        args = ("--max-redirects", "1", "--body", "payload", "--content-type", "text/plain", "post")
+        rc, doc, _ = run(OPEN, *args, "/a")
+        self.assertEqual((doc["data"]["method"], doc["data"]["redirects"][0]["method"]), ("get", "get"))  # the envelope describes the last request
+        self.assertTrue(s.requests[1].startswith(b"GET /b HTTP/1.1"))
+        self.assertNotIn(b"payload", s.requests[1])
+        self.assertNotIn(b"Content-Type", s.requests[1])
+        rc, doc, _ = run(OPEN, *args, "/c")
+        self.assertEqual(doc["data"]["redirects"][0]["method"], "post")
+        self.assertTrue(s.requests[3].startswith(b"POST /d HTTP/1.1"))
+        self.assertTrue(s.requests[3].endswith(b"payload"))
+
+    def test_the_deadline_covers_the_whole_chain(self):
+        s = self.serve(self.hop("/slow"), hold=0.3)
+        t = time.time()
+        rc, doc, _ = run(OPEN, "--max-redirects", "5", "--timeout-ms", "700", "get", "/")
+        self.assertIn(self.rule(doc), ("fetch.timeout", "fetch.redirect-limit"))
+        self.assertLess(time.time() - t, 3.0)
+
+    def test_max_redirects_is_bounded(self):
+        rc, doc, _ = run(OPEN, "--max-redirects", "6", "get", "/")
+        self.assertEqual(doc["error"]["rule"], "args.bad-value")
+
     def test_header_injection_is_refused(self):
         s = self.serve(lambda req: ok())
         rc, doc, _ = run(OPEN, "--accept", "text/plain\r\nX-Evil: 1", "get", "/")
@@ -315,7 +396,7 @@ class Fetch(unittest.TestCase):
         """A `;` in a help text splits a row of the flag table: the flags then list garbage (found by the MCP generator)."""
         rc, doc, _ = run(STRICT, "introspect")
         names = [f["name"] for f in doc["flags"]]
-        self.assertEqual(names, ["--host", "--max-bytes", "--timeout-ms", "--accept", "--body", "--content-type", "--format"])
+        self.assertEqual(names, ["--host", "--max-bytes", "--timeout-ms", "--accept", "--body", "--content-type", "--max-redirects", "--format"])
         for f in doc["flags"]:
             self.assertIn(f["kind"].split(":")[0], ("text", "nat", "choice", "bool"), f)
             self.assertTrue(f["help"], f)

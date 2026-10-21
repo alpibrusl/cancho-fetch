@@ -300,3 +300,24 @@ and `tests/conformance/test_mcp.py` (10 tests, through the real server and the r
 * **Not built**: the `enum` of baked hosts in the `host` property (needs `introspect` to list the hosts), and a
   `--with fetch` entry in a combined server.
 
+## 8.4 Step 5 as built: redirects
+
+`--max-redirects N` (0 to 5, default 0). With 0 a 3xx is the answer, as before. With N, a 301, 302, 303, 307 or 308 with a
+`Location` is followed up to N times, and an N+1th is `fetch.redirect-limit`.
+
+* **Only to a host the build was given, by a target checked before a socket opens.** A `Location` is an absolute path on
+  the same host, or `http://AUTHORITY/path` where AUTHORITY is one of the baked entries (`h` and `h:80` are one; host
+  names compare case-insensitively; the port otherwise exactly). Everything else is `fetch.redirect-not-allowed` with
+  `detail.location` and `detail.reason`: another host, `https://`, a relative path, a network-path (`//h/x`), userinfo
+  (`http://baked@evil/` has the authority `baked@evil`, which is no entry), a path the tool would not send. The test sends
+  seven such locations and checks that the other baked host's server received nothing. No "follow, then check".
+* **Method**: 301, 302 and 303 turn a `post` into a `get` without its body or `Content-Type` (what browsers do, and
+  recorded in the hop); 307 and 308 keep the method and the body. `head` stays `head`.
+* **Deadline**: `--timeout-ms` is for the chain; each hop starts with what is left (never less than 1 ms).
+* **Envelope**: `data.redirects` is always present (empty without a hop), each hop `{status, from, path, to, to_path,
+  method}`; `host`, `path`, `method` and `status` describe the last request. Fragments are dropped from a `Location`.
+* **Where the loop is**: the generated main (each baked host has its own `Out`, so the next hop's capability is picked by
+  index); `exchange` decides the target and returns it, `retarget` rebuilds the plan. The authority row did not change.
+* **Not built**: a redirect to an `https://` baked host (no HTTPS yet); credentials are not sent at all, so the
+  cross-host credential-leak case does not arise (it will with credentials, and the rule then is: dropped on a host change).
+

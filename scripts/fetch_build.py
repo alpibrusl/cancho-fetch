@@ -43,22 +43,28 @@ def source(entries, allow_private):
     for i, b in enumerate(bounds):
         w('fn via_%d[&h, &k, &o, &p](heap: &!h Heap, clock: &k Clock, out: &o Out("%s"), plan: &p fetchcore.Plan) -> [heap, clock, poll, net_out("%s")] fetchcore.Answer {' % (i, b, b))
         w("    match tcp_connect(out, fetchcore.dial_host(hosts(), %d), fetchcore.dial_port(hosts(), %d)) {" % (i, i))
-        w("        Dialed::Ok(conn) => {\n            return fetchcore.exchange(heap, clock, conn, plan, fetchcore.authority(hosts(), %d), private_ok());\n        }" % i)
+        w("        Dialed::Ok(conn) => {\n            return fetchcore.exchange(heap, clock, conn, plan, fetchcore.authority(hosts(), %d), hosts(), private_ok());\n        }" % i)
         w("        Dialed::Failed(errno) => {\n            return fetchcore.dial_failed(heap, errno);\n        }\n    }\n}\n")
     params = ", ".join("o%d: &q%d Out(\"%s\")" % (i, i, b) for i, b in enumerate(bounds))
     gens = ", ".join("&q%d" % i for i in range(n))
     w("fn run[&h, &g, &i, &k, %s](heap: &!h Heap, args: &g Args, io: &!i Io, clock: &k Clock, %s) -> [heap, args, io_write, err_write, clock, poll, %s] int {" % (gens, params, rows))
     w("    let which = cli.subcommand(args);\n    if which != 0 {\n        return describe.answer(heap, io, which, fetchcore.tool(), fetchcore.built());\n    }")
-    w("    let plan = fetchcore.plan(heap, args, hosts());\n    var status = 0;\n    borrow plan as &p in {\n        if fetchcore.refused(p) {\n            status = fetchcore.refuse(heap, io, p);\n        } else {\n            let pick = fetchcore.host_of(p);")
+    w("    var plan = fetchcore.plan(heap, args, hosts());")
+    w("    var refused = false;\n    borrow plan as &r in {\n        refused = fetchcore.refused(r);\n    }")
+    w("    var status = 0;\n    if refused {\n        borrow plan as &p in {\n            status = fetchcore.refuse(heap, io, p);\n        }\n        fetchcore.drop_plan(heap, plan);\n        return status;\n    }")
+    w("    var answer = fetchcore.nothing(heap);\n    var finished = false;\n    while !finished {\n        borrow plan as &p in {\n            let pick = fetchcore.host_of(p);")
     for i in range(n):
         if i == n - 1:
-            w("            } else {" if n > 1 else "            {")
+            w("            %s{" % ("} else " if n > 1 else ""))
         elif i == 0:
             w("            if pick == 0 {")
         else:
             w("            } else if pick == %d {" % i)
-        w("                let answer = via_%d(heap, clock, o%d, p);\n                status = fetchcore.respond(heap, io, p, answer);" % (i, i))
-    w("            }\n        }\n    }\n    fetchcore.drop_plan(heap, plan);\n    return status;\n}\n")
+        w("                answer = fetchcore.replace(heap, answer, via_%d(heap, clock, o%d, p));" % (i, i))
+    w("            }\n        }")
+    w("        var again = false;\n        borrow answer as &a in {\n            again = fetchcore.follows(a);\n        }")
+    w("        if again {\n            plan = fetchcore.retarget(heap, plan, answer, hosts());\n            answer = fetchcore.nothing(heap);\n        } else {\n            finished = true;\n        }\n    }")
+    w("    borrow plan as &p in {\n        status = fetchcore.respond(heap, io, p, answer);\n    }\n    fetchcore.drop_plan(heap, plan);\n    return status;\n}\n")
     names = ", ".join("o%d" % i for i in range(n))
     narrow = "narrow(out, %s)" % ", ".join('"%s"' % b for b in bounds)
     w("fn main(world: World) -> [] int {")
