@@ -139,9 +139,17 @@ def baked_hosts():
     literal_ = text[text.index('return "', start) + 8:text.index('";', start)]
     out = set()
     for entry in literal_.split(";"):
-        authority = entry.split("://", 1)[-1]
-        out.add(authority if ":" in authority else authority + ":80")
+        scheme, _, authority = entry.partition("://")
+        out.add(authority if ":" in authority else authority + (":443" if scheme == "https" else ":80"))
     return out
+
+
+def baked_https():
+    """Whether any baked entry is `https://`: only then may the tool read the entropy for its TLS seed."""
+    text = (ROOT / "generated" / "fetch" / "fetch.cho").read_text()
+    start = text.index("fn hosts()")
+    literal_ = text[text.index('return "', start) + 8:text.index('";', start)]
+    return any(e.startswith("https://") for e in literal_.split(";"))
 
 
 def label_text(label):
@@ -166,6 +174,10 @@ def gate(tool, authority, ceilings):
     for label in authority["labels"]:
         text = label_text(label)
         if label["name"] == "net_out" and ceiling.get("net_out") == "baked":
+            continue
+        if text == 'fs_read("/dev/urandom")' and ceiling.get("seed") == "https-only":
+            if not baked_https():
+                problems.append("%s: reads /dev/urandom but no https:// host is baked" % tool)
             continue
         if label["name"] in FORBIDDEN or label["name"] in ceiling.get("forbid", []):
             problems.append("%s: %s is forbidden to every tool" % (tool, text))
