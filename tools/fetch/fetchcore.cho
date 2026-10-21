@@ -1,0 +1,868 @@
+edition 11;
+
+module fetchcore;
+
+// `fetch` -- the parts of the tool that do not depend on which hosts were baked in: the flags, the plan (what was asked,
+// validated), the request, the response and the envelope. `generated/fetch/fetch.cho` holds `main` and the one
+// function per baked host that holds the `Out` capability (a capability's bound is a literal, so the hosts cannot be
+// data); it calls into this module with a connection, never with the capability. docs/design.md is the design.
+//
+//     fetch [--host H] [--max-bytes N] [--timeout-ms N] [--accept TEXT] [--format json|text] METHOD PATH
+//
+// METHOD is `get` or `head`. PATH is the request target and begins with `/`. A full URL is not accepted: the only host
+// that matters is a baked one (`fetch.url-not-a-path`).
+
+import std.addr;
+import std.buffer;
+import std.bytes;
+import std.io;
+import std.json;
+import toolbox.built;
+import toolbox.cli;
+import toolbox.describe;
+import toolbox.fail;
+import toolbox.out;
+import toolbox.text;
+import http_client_wire;
+
+pub fn extra() -> [] &static [byte] {
+    return "fetch.method|2|never|the METHOD is not one this tool sends (get, head);fetch.url-not-a-path|2|never|PATH is a request target (it begins with a single /), not a URL;fetch.path-malformed|2|never|PATH has a byte a request target may not hold;fetch.host-not-allowed|2|sometimes|--host names no host this build was given;fetch.host-required|2|sometimes|more than one host was baked in and --host was not given;fetch.header-malformed|2|never|--accept holds a byte a header value may not hold;fetch.connect-failed|8|never|the connection could not be made;fetch.peer-not-public|8|never|the host resolved to a private, loopback or link-local address and this build does not allow it;fetch.timeout|8|never|the deadline passed before the response was complete;fetch.body-too-large|8|never|the response body is larger than --max-bytes;fetch.response-malformed|8|never|the response is not one this tool reads (the detail names the framing rule);fetch.response-truncated|8|never|the connection ended before the response was complete";
+}
+
+pub fn flag_table() -> [] &static [byte] {
+    return "host||text|none||which baked host to use: the host (or host:port) of one of this build's allowed entries; required when more than one is baked in;max-bytes||nat|none|1048576|the most response body bytes accepted (1 to 16777216); a larger body is fetch.body-too-large;timeout-ms||nat|none|10000|the deadline for the whole request once the name has resolved, in milliseconds (1 to 60000);accept||text|none||the Accept request header;format||choice:json/text|none|json|json for an envelope, text writes the response body to standard output";
+}
+
+pub fn tool() -> [] describe.Tool {
+    return describe.Tool { name: "fetch", version: "0.1.0", summary: "Send one HTTP GET or HEAD request to a host this build was given, and answer the status, the headers and the body. The hosts are in the binary and in its authority row; a request for any other host is refused before a socket opens. No redirects, credentials or cookies.", usage: "fetch [--host H] [--max-bytes N] [--timeout-ms N] [--accept TEXT] [--format json|text] METHOD PATH", output: "document", schema: "fetch.v1", flags: flag_table(), operands: "METHOD|name|1|1|get or head;PATH|text|1|1|the request target: a path beginning with a single /, optionally with a query", rules: "args.unknown-flag;args.missing-value;args.bad-value;args.unexpected-value;args.duplicate-flag;args.missing-operand;args.too-many-operands;fetch.method;fetch.url-not-a-path;fetch.path-malformed;fetch.host-not-allowed;fetch.host-required;fetch.header-malformed;fetch.connect-failed;fetch.peer-not-public;fetch.timeout;fetch.body-too-large;fetch.response-malformed;fetch.response-truncated", extra_rules: extra(), limits: "max-bytes|1048576|16777216;timeout-ms|10000|60000", reversibility: "irreversible-consequential", stdin: "no", guarantees: "bounded_memory" };
+}
+
+pub fn built() -> [] describe.Built {
+    return describe.Built { authority: built.authority(), schema: built.schema(), compiler: built.compiler() };
+}
+
+fn max_bytes_ceiling() -> [] int {
+    return 16777216;
+}
+
+fn timeout_ceiling() -> [] int {
+    return 60000;
+}
+
+// ---------------------------------------------------------------- the baked hosts ---
+//
+// The list is `entry;entry;...`, each `scheme://host[:port]` (generated/fetch/fetch.cho passes it). Only `http` is built
+// so far.
+
+pub fn host_count[&l](list: &l [byte]) -> [] int {
+    if len(list) == 0 {
+        return 0;
+    }
+    var n = 1;
+    var i = 0;
+    while i < len(list) {
+        if int_of(list[i]) == ';' {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    return n;
+}
+
+// Entry `k` of the list, from the first byte after `scheme://`.
+fn entry_range[&l](list: &l [byte], k: int) -> [] (int, int) {
+    var start = 0;
+    var seen = 0;
+    var i = 0;
+    while i <= len(list) {
+        if i == len(list) || int_of(list[i]) == ';' {
+            if seen == k {
+                var s = start;
+                // skip `scheme://`
+                var j = start;
+                while j + 2 < i {
+                    if int_of(list[j]) == ':' && int_of(list[j + 1]) == '/' && int_of(list[j + 2]) == '/' {
+                        s = j + 3;
+                        j = i;
+                    }
+                    j = j + 1;
+                }
+                return (s, i);
+            }
+            seen = seen + 1;
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return (0, 0);
+}
+
+// The `host[:port]` of entry `k`, as the Host header carries it.
+pub fn authority[&l](list: &l [byte], k: int) -> [] &l [byte] {
+    let (a, z) = entry_range(list, k);
+    return list[a..z];
+}
+
+// The host of entry `k`: the authority without a port.
+fn host_part[&l](list: &l [byte], k: int) -> [] &l [byte] {
+    let (a, z) = entry_range(list, k);
+    var colon = z;
+    var i = a;
+    while i < z {
+        if int_of(list[i]) == ':' {
+            colon = i;
+        }
+        i = i + 1;
+    }
+    return list[a..colon];
+}
+
+// Which entry `--host` names: its authority or its host, when that is not ambiguous. -1 for none, -2 for ambiguous.
+fn select[&l, &s](list: &l [byte], wanted: &s [byte]) -> [] int {
+    var found = 0 - 1;
+    var k = 0;
+    while k < host_count(list) {
+        if bytes.equal(authority(list, k), wanted) {
+            return k;
+        }
+        if bytes.equal(host_part(list, k), wanted) {
+            if found >= 0 {
+                return 0 - 2;
+            }
+            found = k;
+        }
+        k = k + 1;
+    }
+    return found;
+}
+
+// ---------------------------------------------------------------- the plan ---
+
+pub struct Plan {
+    // The entry of the baked list the request goes to.
+    host: int,
+    head: bool,
+    max_bytes: int,
+    timeout: int,
+    text_mode: bool,
+    // The request target, and the header lines to add (`Accept: ...\r\n`, or empty): copied out of the arguments.
+    path: buffer.Buffer,
+    extra_headers: buffer.Buffer,
+    errors: fail.Errors,
+}
+
+fn flag_problem[&h](heap: &!h Heap, e: fail.Errors, rule: &static [byte], message: &static [byte], hint: &static [byte], flags: &static [byte]) -> [heap] fail.Errors {
+    var w = fail.open_in(heap, extra(), rule, message, hint);
+    w = fail.no_repair(heap, w);
+    w = fail.detail_open(heap, w);
+    w = json.put_key(heap, w, "flags");
+    w = json.put_string(heap, w, flags);
+    return fail.add(heap, e, w);
+}
+
+// A header value is one line: no control byte but a tab, and no DEL. (`valid_extra` accepts a run of header lines, so a value
+// holding CRLF would pass it as two.)
+fn plain_value[&v](value: &v [byte]) -> [] bool {
+    var i = 0;
+    while i < len(value) {
+        let c = int_of(value[i]);
+        if (c < 32 && c != 9) || c == 127 {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// A request target: `/`, then bytes a target may hold, no `//` at the start (that is a network-path reference, which names
+// another host), no whitespace or control byte.
+fn is_target[&t](target: &t [byte]) -> [] bool {
+    if len(target) == 0 || int_of(target[0]) != '/' {
+        return false;
+    }
+    if len(target) > 1 && int_of(target[1]) == '/' {
+        return false;
+    }
+    return http_client_wire.valid_target(target);
+}
+
+fn is_url[&t](path: &t [byte]) -> [] bool {
+    var i = 0;
+    while i + 2 < len(path) {
+        if int_of(path[i]) == ':' && int_of(path[i + 1]) == '/' && int_of(path[i + 2]) == '/' {
+            return true;
+        }
+        i = i + 1;
+    }
+    return len(path) > 1 && int_of(path[0]) == '/' && int_of(path[1]) == '/';
+}
+
+// Read the arguments into a plan. A plan that carries errors is answered, not sent.
+pub fn plan[&h, &g, &l](heap: &!h Heap, args: &g Args, hosts: &l [byte]) -> [heap, args] Plan {
+    let (parsed, errs) = cli.parse(heap, args, flag_table(), fail.empty_in(heap, extra()));
+    let table = flag_table();
+    var e = errs;
+    var head = false;
+    var host = 0 - 1;
+    var path = buffer.empty(heap, 64);
+    var extra_headers = buffer.empty(heap, 64);
+    var timeout = 0;
+    var most = 0;
+    var text_mode = false;
+    borrow parsed as &p in {
+        text_mode = bytes.equal(cli.text(args, p, table, "format"), "text");
+        most = cli.nat(args, p, table, "max-bytes");
+        timeout = cli.nat(args, p, table, "timeout-ms");
+        if most < 1 || most > max_bytes_ceiling() {
+            e = flag_problem(heap, e, "args.bad-value", "--max-bytes is from 1 to 16777216", "pass a cap in that range", "--max-bytes");
+        }
+        if timeout < 1 || timeout > timeout_ceiling() {
+            e = flag_problem(heap, e, "args.bad-value", "--timeout-ms is from 1 to 60000", "pass a deadline in that range", "--timeout-ms");
+        }
+        if cli.operand_count(p) >= 2 {
+            let method = cli.operand(args, p, 0);
+            let target = cli.operand(args, p, 1);
+            if bytes.equal(method, "get") {
+                head = false;
+            } else if bytes.equal(method, "head") {
+                head = true;
+            } else {
+                var w = fail.open_in(heap, extra(), "fetch.method", "this tool sends get and head", "METHOD is get or head; other methods are not offered");
+                w = fail.no_repair(heap, w);
+                w = fail.detail_open(heap, w);
+                w = json.put_key(heap, w, "method");
+                w = text.put(heap, w, method);
+                e = fail.add(heap, e, w);
+            }
+            if is_url(target) {
+                var w = fail.open_in(heap, extra(), "fetch.url-not-a-path", "PATH is a request target, not a URL: the host is chosen with --host from the hosts this build was given", "pass only the path (and query), e.g. /v1/items?limit=10, and --host if more than one host is baked in");
+                w = fail.no_repair(heap, w);
+                w = fail.detail_open(heap, w);
+                w = json.put_key(heap, w, "path");
+                w = text.put(heap, w, target);
+                e = fail.add(heap, e, w);
+            } else if !is_target(target) {
+                var w = fail.open_in(heap, extra(), "fetch.path-malformed", "PATH is not a request target this tool will send: it must begin with a single /, and hold no space or control byte", "percent-encode the bytes a target may not hold");
+                w = fail.no_repair(heap, w);
+                w = fail.detail_open(heap, w);
+                w = json.put_key(heap, w, "path");
+                w = text.put(heap, w, target);
+                e = fail.add(heap, e, w);
+            } else {
+                path = buffer.append(heap, path, target);
+            }
+        }
+        let n = host_count(hosts);
+        if cli.has(p, table, "host") {
+            host = select(hosts, cli.text(args, p, table, "host"));
+            if host < 0 {
+                var w = fail.open_in(heap, extra(), "fetch.host-not-allowed", "--host names no host this build was given, or more than one", "use one of detail.allowed");
+                w = fail.no_repair(heap, w);
+                w = fail.detail_open(heap, w);
+                w = json.put_key(heap, w, "host");
+                w = text.put(heap, w, cli.text(args, p, table, "host"));
+                w = json.put_key(heap, w, "allowed");
+                w = json.begin_array(heap, w);
+                var k = 0;
+                while k < n {
+                    w = json.put_string(heap, w, authority(hosts, k));
+                    k = k + 1;
+                }
+                w = json.end_array(heap, w);
+                e = fail.add(heap, e, w);
+            }
+        } else if n == 1 {
+            host = 0;
+        } else {
+            var w = fail.open_in(heap, extra(), "fetch.host-required", "this build has more than one host and --host was not given", "pass --host with one of detail.allowed");
+            w = fail.no_repair(heap, w);
+            w = fail.detail_open(heap, w);
+            w = json.put_key(heap, w, "allowed");
+            w = json.begin_array(heap, w);
+            var k = 0;
+            while k < n {
+                w = json.put_string(heap, w, authority(hosts, k));
+                k = k + 1;
+            }
+            w = json.end_array(heap, w);
+            e = fail.add(heap, e, w);
+        }
+        extra_headers = buffer.append(heap, extra_headers, "User-Agent: cancho-fetch\r\nAccept-Encoding: identity\r\n");
+        if cli.has(p, table, "accept") {
+            let value = cli.text(args, p, table, "accept");
+            var line = buffer.empty(heap, 32 + len(value));
+            line = buffer.append(heap, line, "Accept: ");
+            line = buffer.append(heap, line, value);
+            line = buffer.append(heap, line, "\r\n");
+            var good = false;
+            borrow line as &ln in {
+                good = len(value) > 0 && plain_value(value) && http_client_wire.valid_extra(buffer.bytes(ln));
+                if good {
+                    extra_headers = buffer.append(heap, extra_headers, buffer.bytes(ln));
+                }
+            }
+            buffer.drop(heap, line);
+            if !good {
+                e = flag_problem(heap, e, "fetch.header-malformed", "--accept holds a byte a header value may not hold, or is empty", "give a media range such as application/json", "--accept");
+            }
+        }
+    }
+    cli.drop(heap, parsed);
+    return Plan { host: host, head: head, max_bytes: most, timeout: timeout, text_mode: text_mode, path: path, extra_headers: extra_headers, errors: e };
+}
+
+// Does the plan carry a refusal already?
+pub fn refused[&p](plan: &p Plan) -> [] bool {
+    return fail.count(plan.errors) > 0;
+}
+
+pub fn host_of[&p](plan: &p Plan) -> [] int {
+    return plan.host;
+}
+
+pub fn drop_plan[&h](heap: &!h Heap, plan: Plan) -> [heap] int {
+    let Plan { host, head, max_bytes, timeout, text_mode, path, extra_headers, errors } = plan;
+    buffer.drop(heap, path);
+    buffer.drop(heap, extra_headers);
+    fail.drop(heap, errors);
+    return 0;
+}
+
+// Answer a plan that carries errors (the refusal is the whole answer).
+pub fn refuse[&h, &i, &p](heap: &!h Heap, io: &!i Io, plan: &p Plan) -> [heap, io_write, err_write] int {
+    let empty = buffer.empty(heap, 1);
+    var status = 0;
+    borrow empty as &e in {
+        status = out.respond(heap, io, "fetch", "fetch.v1", "0.1.0", buffer.bytes(e), "", plan.errors, plan.text_mode, "", 0);
+    }
+    buffer.drop(heap, empty);
+    return status;
+}
+
+// ---------------------------------------------------------------- the connection ---
+//
+// A connection is made non-blocking and watched with a poller, so that the deadline holds for a server that stops
+// answering. (The name is resolved by `tcp_connect` before any of this, and a resolver that never answers is not bounded
+// by the deadline: docs/design.md section 5.5.)
+
+// Wait until the connection can be read (`want` 1) or written (`want` 2), or the deadline passes. 1 for ready, 0 for
+// the deadline.
+fn wait[&k, &q, &c, &e](clock: &k Clock, poller: &!q Poller, conn: &c Conn, want: int, events: &!e [int], deadline: int) -> [clock, poll] int {
+    let left = deadline - clock_ms(clock);
+    if left <= 0 {
+        return 0;
+    }
+    let changed = poller_modify(poller, conn, 1, want);
+    let n = poller_wait(poller, events, left);
+    if n == 0 {
+        return 0;
+    }
+    return 1;
+}
+
+// All of `data`, by the deadline. 0 when it went, -1 when the deadline passed, the errno otherwise.
+fn send_all[&k, &q, &c, &e, &d](clock: &k Clock, poller: &!q Poller, conn: &!c Conn, events: &!e [int], data: &d [byte], deadline: int) -> [clock, poll, conn_write] int {
+    var at = 0;
+    while at < len(data) {
+        match conn_write(conn, data[at..len(data)]) {
+            Sent::Wrote(n) => {
+                at = at + n;
+            }
+            Sent::Again => {
+                if wait(clock, poller, conn, 2, events, deadline) == 0 {
+                    return 0 - 1;
+                }
+            }
+            Sent::Failed(errno) => {
+                return errno;
+            }
+        }
+    }
+    return 0;
+}
+
+// Some bytes into `into`, by the deadline. The count (above 0), 0 when the peer closed, -1 for the deadline, and
+// -2 minus the errno when the read failed.
+fn read_some[&k, &q, &c, &e, &b](clock: &k Clock, poller: &!q Poller, conn: &!c Conn, events: &!e [int], into: &!b [byte], deadline: int) -> [clock, poll, conn_read] int {
+    while true {
+        match conn_read(conn, into) {
+            Received::Data(n) => {
+                return n;
+            }
+            Received::End => {
+                return 0;
+            }
+            Received::Again => {
+                if wait(clock, poller, conn, 1, events, deadline) == 0 {
+                    return 0 - 1;
+                }
+            }
+            Received::Failed(errno) => {
+                return 0 - 2 - errno;
+            }
+        }
+    }
+    return 0 - 1;
+}
+
+// Is this IPv4 address one that a request should not reach: loopback, private, link-local, unspecified, multicast,
+// reserved, carrier-grade NAT or the benchmarking range?
+fn private_v4(address: int) -> [] bool {
+    let a = address >> 24 & 255;
+    let b = address >> 16 & 255;
+    if a == 0 || a == 10 || a == 127 || a >= 224 {
+        return true;
+    }
+    if a == 169 && b == 254 {
+        return true;
+    }
+    if a == 172 && b >= 16 && b <= 31 {
+        return true;
+    }
+    if a == 192 && b == 168 {
+        return true;
+    }
+    if a == 100 && b >= 64 && b <= 127 {
+        return true;
+    }
+    if a == 198 && (b == 18 || b == 19) {
+        return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------- the response ---
+//
+// State of the body being read, in a slice of integers.
+//
+//     0 how the body is framed: 0 none, 1 a length, 2 chunked, 3 until the peer closes
+//     1 the length it declared   2 the bytes taken so far   3 done (1)   4 a refusal code, or 0 (1000: too large)
+//     5 the body bytes kept
+//     8.. the chunk decoder's state (`http_client_wire.chunk_slots()` integers)
+
+fn mode_none() -> [] int {
+    return 0;
+}
+
+fn mode_length() -> [] int {
+    return 1;
+}
+
+fn mode_chunked() -> [] int {
+    return 2;
+}
+
+fn mode_close() -> [] int {
+    return 3;
+}
+
+// Take `n` bytes of `rd` into the body: all of them, only as many as the length declared, or what the chunk decoder
+// finds. The body is `Body too large` past `most`.
+fn absorb[&h, &b, &s](heap: &!h Heap, body: buffer.Buffer, rd: &!b [byte], n: int, st: &!s [int], most: int) -> [heap] buffer.Buffer {
+    var out = body;
+    var take = n;
+    var from = 0;
+    if st[0] == mode_none() {
+        st[3] = 1;
+        return out;
+    }
+    if st[0] == mode_chunked() {
+        let refusal = http_client_wire.chunk_run(rd, 0, n, 0, st, 8);
+        if refusal != 0 {
+            st[4] = refusal;
+            st[3] = 1;
+            return out;
+        }
+        take = st[8 + 3];
+        if st[8] == http_client_wire.chunk_done() {
+            st[3] = 1;
+        }
+    } else if st[0] == mode_length() {
+        if take > st[1] - st[2] {
+            take = st[1] - st[2];
+        }
+        if st[2] + take >= st[1] {
+            st[3] = 1;
+        }
+    }
+    if st[5] + take > most {
+        st[4] = 1000;
+        st[3] = 1;
+        return out;
+    }
+    st[2] = st[2] + take;
+    st[5] = st[5] + take;
+    return buffer.append(heap, out, rd[from..take]);
+}
+
+// The headers an answer carries back: these names only, lower case, in the order the response had them.
+fn shown_header[&s, &t](src: &s [byte], table: &t [int], i: int) -> [] bool {
+    return http_client_wire.header_is(src, table, i, "content-type") || http_client_wire.header_is(src, table, i, "content-length") || http_client_wire.header_is(src, table, i, "location") || http_client_wire.header_is(src, table, i, "etag") || http_client_wire.header_is(src, table, i, "last-modified") || http_client_wire.header_is(src, table, i, "cache-control") || http_client_wire.header_is(src, table, i, "retry-after") || http_client_wire.header_is(src, table, i, "www-authenticate") || http_client_wire.header_is(src, table, i, "date");
+}
+
+// The refusal tag of a framing code of the wire module, as the detail of `fetch.response-malformed`.
+fn response_error[&h](heap: &!h Heap, e: fail.Errors, code: int, position: int) -> [heap] fail.Errors {
+    var w = fail.open_in(heap, extra(), "fetch.response-malformed", "the response is not one this tool reads", "the server's answer broke a framing rule; detail.rule names it, and a request to another path or server may differ");
+    w = fail.no_repair(heap, w);
+    w = fail.detail_open(heap, w);
+    w = json.put_key(heap, w, "rule");
+    w = json.put_string(heap, w, http_client_wire.refusal_tag(code));
+    w = json.put_key(heap, w, "position");
+    w = json.put_int(heap, w, position);
+    return fail.add(heap, e, w);
+}
+
+fn simple_detail[&h](heap: &!h Heap, e: fail.Errors, rule: &static [byte], message: &static [byte], hint: &static [byte], key: &static [byte], value: int) -> [heap] fail.Errors {
+    var w = fail.open_in(heap, extra(), rule, message, hint);
+    w = fail.no_repair(heap, w);
+    w = fail.detail_open(heap, w);
+    w = json.put_key(heap, w, key);
+    w = json.put_int(heap, w, value);
+    return fail.add(heap, e, w);
+}
+
+// ---------------------------------------------------------------- the exchange ---
+
+pub struct Answer {
+    errors: fail.Errors,
+    payload: buffer.Buffer,
+    shown: buffer.Buffer,
+}
+
+// The envelope's data for a completed exchange.
+fn data[&h, &p, &a, &r, &x, &b, &q](heap: &!h Heap, plan: &p Plan, authority: &a [byte], status: int, reason: &r buffer.Buffer, headers: &x buffer.Buffer, body: &b buffer.Buffer, peer: &q buffer.Buffer, millis: int) -> [heap] buffer.Buffer {
+    var w = json.begin_object(heap, json.writer(heap, 512));
+    w = json.put_key(heap, w, "method");
+    if plan.head {
+        w = json.put_string(heap, w, "head");
+    } else {
+        w = json.put_string(heap, w, "get");
+    }
+    w = json.put_key(heap, w, "host");
+    w = json.put_string(heap, w, authority);
+    w = json.put_key(heap, w, "path");
+    w = json.put_string(heap, w, buffer.bytes(plan.path));
+    w = json.put_key(heap, w, "status");
+    w = json.put_int(heap, w, status);
+    w = json.put_key(heap, w, "reason");
+    w = json.put_string(heap, w, buffer.bytes(reason));
+    w = json.put_key(heap, w, "headers");
+    w = json.put_fragment(heap, w, buffer.bytes(headers));
+    w = json.put_key(heap, w, "body");
+    w = text.put(heap, w, buffer.bytes(body));
+    w = json.put_key(heap, w, "body_bytes");
+    w = json.put_int(heap, w, buffer.size(body));
+    w = json.put_key(heap, w, "peer");
+    w = json.put_string(heap, w, buffer.bytes(peer));
+    w = json.put_key(heap, w, "milliseconds");
+    w = json.put_int(heap, w, millis);
+    w = json.end_object(heap, w);
+    return json.finish(w);
+}
+
+// Send the request over `conn`, read the response, close the connection. `authority` is the baked entry's `host[:port]`;
+// `allow_private` says whether a loopback, private or link-local peer may be talked to. Answers the errors, the
+// envelope's data, and (for `--format text`) the body.
+pub fn exchange[&h, &k, &p, &a](heap: &!h Heap, clock: &k Clock, conn: Conn, plan: &p Plan, authority: &a [byte], allow_private: bool) -> [heap, clock, poll] Answer {
+    var e = fail.empty_in(heap, extra());
+    var payload = buffer.empty(heap, 1);
+    var shown = buffer.empty(heap, 1);
+    var c = conn;
+    let started = clock_ms(clock);
+    let deadline = started + plan.timeout;
+    var peer_text = buffer.empty(heap, 32);
+    var allowed = true;
+    region r {
+        // The peer first: a name that resolved to somewhere private is refused before a byte is sent.
+        let raw = alloc_slice[r](19, byte_of(0));
+        var got = 9;
+        borrow c as &cc in {
+            got = conn_peer(cc, raw);
+        }
+        if got == 0 {
+            match addr.decode(raw) {
+                addr.Parsed::Ok(who) => {
+                    let text_room = alloc_slice[r](64, byte_of(0));
+                    let n = addr.text_port(who, text_room);
+                    peer_text = buffer.append(heap, peer_text, text_room[0..n]);
+                    if addr.family(who) == 4 && private_v4(addr.word(who, 3)) && !allow_private {
+                        allowed = false;
+                    }
+                }
+                addr.Parsed::Bad => {
+                    allowed = allow_private;
+                }
+            }
+        } else {
+            allowed = allow_private;
+        }
+    }
+    if !allowed {
+        var w = fail.open_in(heap, extra(), "fetch.peer-not-public", "the host resolved to an address that is private, loopback or link-local, and this build does not allow that", "the name must resolve to a public address; nothing was sent");
+        w = fail.no_repair(heap, w);
+        w = fail.detail_open(heap, w);
+        w = json.put_key(heap, w, "peer");
+        borrow peer_text as &pt in {
+            w = json.put_string(heap, w, buffer.bytes(pt));
+        }
+        e = fail.add(heap, e, w);
+        conn_close(c);
+        buffer.drop(heap, peer_text);
+        return Answer { errors: e, payload: payload, shown: shown };
+    }
+    borrow mut c as &!cn in {
+        conn_nonblocking(cn);
+    }
+    var body = buffer.empty(heap, 1024);
+    var status_code = 0;
+    var reason = buffer.empty(heap, 16);
+    var shown_headers = buffer.empty(heap, 64);
+    match poller_new() {
+        Polling::Failed(errno) => {
+            e = simple_detail(heap, e, "fetch.connect-failed", "the connection could not be watched", "the operating system refused a poller; retry", "errno", errno);
+        }
+        Polling::Ok(pl) => {
+            var poller = pl;
+            region r {
+                let events = alloc_slice[r](8, 0);
+                let rd = alloc_slice[r](8192, byte_of(0));
+                let acc = alloc_slice[r](24576, byte_of(0));
+                let table = alloc_slice[r](http_client_wire.slots(64), 0);
+                let st = alloc_slice[r](16, 0);
+                var added = 0;
+                borrow c as &cr in {
+                    borrow mut poller as &!pq in {
+                        added = poller_add_conn(pq, cr, 1, 2);
+                    }
+                }
+                // The request.
+                let req = alloc_slice[r](4096, byte_of(0));
+                var method = "GET";
+                if plan.head {
+                    method = "HEAD";
+                }
+                var sent = 0 - 3;
+                let target = buffer.bytes(plan.path);
+                let more = buffer.bytes(plan.extra_headers);
+                let size = http_client_wire.write_head(req, method, target, authority, more, http_client_wire.body_none(), false, true);
+                var sent = 0 - 3;
+                if size >= 0 {
+                    borrow mut c as &!cm in {
+                        borrow mut poller as &!pm in {
+                            sent = send_all(clock, pm, cm, events, req[0..size], deadline);
+                        }
+                    }
+                }
+                var filled = 0;
+                var head_done = false;
+                var phase = 0;
+                var body_start = 0;
+                if sent == 0 - 1 {
+                    e = simple_detail(heap, e, "fetch.timeout", "the deadline passed before the request was sent", "raise --timeout-ms, up to 60000, or try the host later", "timeout_ms", plan.timeout);
+                    phase = 9;
+                } else if sent != 0 {
+                    e = simple_detail(heap, e, "fetch.connect-failed", "the request could not be sent", "the connection broke while sending; retry", "errno", sent);
+                    phase = 9;
+                }
+                // The head.
+                while phase == 0 && filled < 24576 {
+                    var n = 0;
+                    borrow mut c as &!cm in {
+                        borrow mut poller as &!pm in {
+                            n = read_some(clock, pm, cm, events, acc[filled..24576], deadline);
+                        }
+                    }
+                    if n == 0 - 1 {
+                        e = simple_detail(heap, e, "fetch.timeout", "the deadline passed before the response head arrived", "raise --timeout-ms, up to 60000, or try the host later", "timeout_ms", plan.timeout);
+                        phase = 9;
+                    } else if n < 0 - 1 {
+                        e = simple_detail(heap, e, "fetch.connect-failed", "the connection failed while reading the response", "the server broke the connection; retry", "errno", 0 - 2 - n);
+                        phase = 9;
+                    } else if n == 0 {
+                        e = simple_detail(heap, e, "fetch.response-truncated", "the connection closed before the response head was complete", "the server closed early; retry", "bytes", filled);
+                        phase = 9;
+                    } else {
+                        filled = filled + n;
+                        let result = http_client_wire.parse_head(acc[0..filled], table, 16384);
+                        if result >= 0 {
+                            body_start = result;
+                            head_done = true;
+                            phase = 1;
+                        } else if !http_client_wire.is_incomplete(result) {
+                            e = response_error(heap, e, http_client_wire.error_code(result), http_client_wire.error_position(result));
+                            phase = 9;
+                        }
+                    }
+                }
+                if phase == 0 {
+                    e = response_error(heap, e, http_client_wire.c_head_too_large(), filled);
+                    phase = 9;
+                }
+                // The framing, then the body.
+                if head_done {
+                    status_code = table[0];
+                    reason = buffer.append(heap, reason, acc[table[6]..table[7]]);
+                    var hw = json.begin_array(heap, json.writer(heap, 256));
+                    var i = 0;
+                    while i < table[2] {
+                        if shown_header(acc[0..body_start], table, i) {
+                            hw = json.begin_object(heap, hw);
+                            hw = json.put_key(heap, hw, "name");
+                            hw = json.put_string(heap, hw, acc[table[16 + 4 * i]..table[16 + 4 * i + 1]]);
+                            hw = json.put_key(heap, hw, "value");
+                            hw = json.put_string(heap, hw, acc[table[16 + 4 * i + 2]..table[16 + 4 * i + 3]]);
+                            hw = json.end_object(heap, hw);
+                        }
+                        i = i + 1;
+                    }
+                    hw = json.end_array(heap, hw);
+                    buffer.drop(heap, shown_headers);
+                    shown_headers = json.finish(hw);
+                    st[0] = mode_close();
+                    if plan.head || status_code == 204 || status_code == 304 || status_code / 100 == 1 {
+                        st[0] = mode_none();
+                    } else if table[5] & 1 != 0 {
+                        st[0] = mode_chunked();
+                        http_client_wire.chunk_reset(st, 8);
+                    } else if table[4] >= 0 {
+                        st[0] = mode_length();
+                        st[1] = table[4];
+                        if table[4] > plan.max_bytes {
+                            st[4] = 1000;
+                            st[3] = 1;
+                        }
+                    }
+                    if st[0] == mode_length() && st[1] == 0 {
+                        st[3] = 1;
+                    }
+                    // What followed the head in the same reads.
+                    let left = filled - body_start;
+                    if st[3] == 0 && left > 0 {
+                        var k = 0;
+                        while k < left {
+                            rd[k] = acc[body_start + k];
+                            k = k + 1;
+                        }
+                        body = absorb(heap, body, rd, left, st, plan.max_bytes);
+                    } else if st[0] == mode_none() {
+                        st[3] = 1;
+                    }
+                    // The rest.
+                    var live = true;
+                    while st[3] == 0 && live {
+                        var n = 0;
+                        borrow mut c as &!cm in {
+                            borrow mut poller as &!pm in {
+                                n = read_some(clock, pm, cm, events, rd, deadline);
+                            }
+                        }
+                        if n == 0 - 1 {
+                            e = simple_detail(heap, e, "fetch.timeout", "the deadline passed before the response was complete", "raise --timeout-ms, up to 60000, or ask for less", "timeout_ms", plan.timeout);
+                            live = false;
+                        } else if n < 0 - 1 {
+                            e = simple_detail(heap, e, "fetch.connect-failed", "the connection failed while reading the response body", "the server broke the connection; retry", "errno", 0 - 2 - n);
+                            live = false;
+                        } else if n == 0 {
+                            live = false;
+                            if st[0] != mode_close() {
+                                e = simple_detail(heap, e, "fetch.response-truncated", "the connection closed before the body was complete", "the server closed early; retry", "bytes", st[5]);
+                            }
+                        } else {
+                            body = absorb(heap, body, rd, n, st, plan.max_bytes);
+                        }
+                    }
+                    if st[4] == 1000 {
+                        e = simple_detail(heap, e, "fetch.body-too-large", "the response body is larger than --max-bytes", "raise --max-bytes, up to 16777216, or ask for less", "max_bytes", plan.max_bytes);
+                    } else if st[4] != 0 {
+                        e = response_error(heap, e, st[4], 0);
+                    }
+                }
+                borrow c as &cq in {
+                    borrow mut poller as &!pc in {
+                        poller_remove(pc, cq);
+                    }
+                }
+            }
+            poller_close(poller);
+        }
+    }
+    conn_close(c);
+    let millis = clock_ms(clock) - started;
+    var clean = false;
+    borrow e as &er in {
+        clean = fail.count(er) == 0;
+    }
+    if clean {
+        buffer.drop(heap, payload);
+        borrow reason as &rb in {
+            borrow shown_headers as &hb in {
+                borrow body as &bb in {
+                    borrow peer_text as &pb in {
+                        payload = data(heap, plan, authority, status_code, rb, hb, bb, pb, millis);
+                    }
+                }
+            }
+        }
+        buffer.drop(heap, shown);
+        shown = body;
+    } else {
+        buffer.drop(heap, body);
+    }
+    buffer.drop(heap, reason);
+    buffer.drop(heap, shown_headers);
+    buffer.drop(heap, peer_text);
+    return Answer { errors: e, payload: payload, shown: shown };
+}
+
+// ---------------------------------------------------------------- dialing and answering ---
+
+// The host to dial for entry `k`, and its port (the entry's, else 80).
+pub fn dial_host[&l](list: &l [byte], k: int) -> [] &l [byte] {
+    return host_part(list, k);
+}
+
+pub fn dial_port[&l](list: &l [byte], k: int) -> [] int {
+    let (a, z) = entry_range(list, k);
+    var colon = z;
+    var i = a;
+    while i < z {
+        if int_of(list[i]) == ':' {
+            colon = i;
+        }
+        i = i + 1;
+    }
+    if colon == z {
+        return 80;
+    }
+    var port = 0;
+    var j = colon + 1;
+    while j < z {
+        port = port * 10 + int_of(list[j]) - '0';
+        j = j + 1;
+    }
+    return port;
+}
+
+// The answer for a dial the operating system refused.
+pub fn dial_failed[&h](heap: &!h Heap, errno: int) -> [heap] Answer {
+    var e = fail.empty_in(heap, extra());
+    e = simple_detail(heap, e, "fetch.connect-failed", "the connection could not be made", "the host refused or did not answer; check it is up and retry", "errno", errno);
+    return Answer { errors: e, payload: buffer.empty(heap, 1), shown: buffer.empty(heap, 1) };
+}
+
+// Print the answer and free it. Exit status 0 for a response of any HTTP status.
+pub fn respond[&h, &i, &p](heap: &!h Heap, io: &!i Io, plan: &p Plan, answer: Answer) -> [heap, io_write, err_write] int {
+    let Answer { errors, payload, shown } = answer;
+    var status = 0;
+    borrow payload as &d in {
+        borrow shown as &t in {
+            borrow errors as &er in {
+                status = out.respond(heap, io, "fetch", "fetch.v1", "0.1.0", buffer.bytes(d), "", er, plan.text_mode, buffer.bytes(t), 0);
+            }
+        }
+    }
+    buffer.drop(heap, payload);
+    buffer.drop(heap, shown);
+    fail.drop(heap, errors);
+    return status;
+}

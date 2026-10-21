@@ -1,0 +1,19 @@
+# The authority ceiling of each tool (cancho docs/agent-toolbox.md D12), as in cancho-tools and cancho-table: a person
+# writes and reviews this file; the authority is whatever `cancho authority` derives from the source
+# (manifests/<tool>.authority.json, embedded in the binary and printed by `fetch introspect`), and
+# scripts/manifest.py --check fails when a derived label is not allowed here. The derived set may be smaller than the
+# ceiling, never larger.
+#
+# THIS REPOSITORY'S CEILING IS THE OPPOSITE OF cancho-tools': `net_out` is allowed, and only for the hosts a build was
+# given (scripts/manifest.py compares the derived `net_out` labels with them). `ffi` and `net_in` are not, `bounded` must
+# be true, and nothing is written to disk. `clock` is allowed for the deadline, as `run` has it in cancho-tools.
+#
+# `fetch` reads no file and writes none (the trust roots and the TLS seed come with HTTPS, a later step, and are
+# added here with their reasons then).
+
+max_tools = 1
+
+[fetch]
+allow = ["args", "clock", "conn_read", "conn_write", "err_write", "heap", "io_write", "poll"]
+net_out = "baked"
+forbid = ["ffi", "net_in", "file_write", "dir_write", "exec"]

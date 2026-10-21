@@ -1,0 +1,44 @@
+[package]
+name = "fetch"
+cancho = "597e6b01aae0f962adc9923d303aa94b6468f5f3"   # the compiler these sources were written for (edition 11: Out and Ports)
+
+# `contract` is not a directory here: it is cancho-tools' package, one store per module, pinned to a commit, as in
+# cancho-table. `toolbox.built` is not in the package; it is this tool's own generated module (generated/fetch,
+# written by scripts/manifest.py). `http_client_wire` is cancho's pure request writer and response reader
+# (packages/http-client), the strict framing two programs already agreed on (cancho docs/http-client.md section 2.1).
+
+[dependencies.cli]
+git = "https://github.com/alpibrusl/cancho-tools"
+rev = "49a430e21d2b8148e764dbf4c2c32df245ac0522"
+path = ".cancho-vcs/toolbox.cli"
+
+[dependencies.describe]
+git = "https://github.com/alpibrusl/cancho-tools"
+rev = "49a430e21d2b8148e764dbf4c2c32df245ac0522"
+path = ".cancho-vcs/toolbox.describe"
+
+[dependencies.fail]
+git = "https://github.com/alpibrusl/cancho-tools"
+rev = "49a430e21d2b8148e764dbf4c2c32df245ac0522"
+path = ".cancho-vcs/toolbox.fail"
+
+[dependencies.out]
+git = "https://github.com/alpibrusl/cancho-tools"
+rev = "49a430e21d2b8148e764dbf4c2c32df245ac0522"
+path = ".cancho-vcs/toolbox.out"
+
+[dependencies.text]
+git = "https://github.com/alpibrusl/cancho-tools"
+rev = "49a430e21d2b8148e764dbf4c2c32df245ac0522"
+path = ".cancho-vcs/toolbox.text"
+
+[dependencies.wire]
+git = "https://github.com/alpibrusl/cancho"
+rev = "597e6b01aae0f962adc9923d303aa94b6468f5f3"
+path = "packages/http-client/.cancho-vcs/http_client_wire"
+
+[[bin]]
+name = "fetch"
+sources = ["tools/fetch", "generated/fetch"]
+std = true
+out = "build/fetch"
