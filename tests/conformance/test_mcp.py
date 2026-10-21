@@ -22,6 +22,7 @@ MCP = None
 
 def setUpModule():
     global MCP
+    tf.ROOTS, tf.CONTEXTS = tf.make_certificates(tf.TMP)
     fetch = tf.build("mcp-fetch", "--allow-private")
     shutil.copy(fetch, BIN / "fetch")
     r = subprocess.run([sys.executable, str(ROOT / "scripts" / "mcp.py"), "build", "--bin", str(BIN), "--out", str(BIN / "mcp")],

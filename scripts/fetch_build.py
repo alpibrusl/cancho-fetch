@@ -116,11 +116,15 @@ def main():
     ap.add_argument("--roots", help="PEM bundle embedded as the trust store of every https host")
     ap.add_argument("--out", default="build/fetch")
     ap.add_argument("--no-manifest", action="store_true")
+    ap.add_argument("--generate-only", action="store_true", help="write generated/ and the manifest, but do not compile (the committed files are made this way)")
     a = ap.parse_args()
     (ROOT / "generated" / "fetch").mkdir(parents=True, exist_ok=True)
     (ROOT / "generated" / "fetch" / "fetch.cho").write_text(source(a.host, a.allow_private, pathlib.Path(a.roots).read_text() if a.roots else ""))
     cancho = os.environ.get("CANCHO", "cancho")
-    for cmd in ([cancho, "install"], [sys.executable, str(ROOT / "scripts" / "manifest.py")], [cancho, "build"]):
+    steps = [[cancho, "install"], [sys.executable, str(ROOT / "scripts" / "manifest.py")]]
+    if not a.generate_only:
+        steps.append([cancho, "build"])
+    for cmd in steps:
         if a.no_manifest and "manifest.py" in cmd[-1]:
             continue
         r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)

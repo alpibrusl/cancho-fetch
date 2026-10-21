@@ -321,3 +321,29 @@ and `tests/conformance/test_mcp.py` (10 tests, through the real server and the r
 * **Not built**: a redirect to an `https://` baked host (no HTTPS yet); credentials are not sent at all, so the
   cross-host credential-leak case does not arise (it will with credentials, and the rule then is: dropped on a host change).
 
+## 8.5 Step 2 as built: `https`, on the pure TLS client, with the roots in the binary
+
+`fetch_build.py --host https://h[:443] --roots ca.pem`. The decision you made (pure TLS, baked roots) and what it costs:
+
+* **The client is `packages/tls` and `packages/x509` at the pinned revision (597e6b0), unreviewed.** `docs/ROADMAP.md` #281
+  says its independent review (#209) has not happened and that a full handshake costs 4 to 7 times OpenSSL's CPU. Nothing here
+  makes either better; `fetch` over `https` is therefore **not to be described as production-ready**, and the README says so.
+* **The trust roots are a build input, not a file read at run time**: `--roots FILE` is embedded as a literal, so the row has
+  no `fs_read` of a roots path, a changed root is a rebuild, and a missing `--roots` with an `https://` host is a build
+  error. The chain is always checked against the name as baked (`localhost` in the tests); there is no flag that turns
+  verification off.
+* **The row gains one label, `fs_read("/dev/urandom")`**, for the 32-byte seed of the engine's generator, and only when an
+  `https://` host is baked: `scripts/manifest.py` fails if the label appears without one (`tools.toml`: `seed = "https-only"`).
+  Everything else is as before: the TLS engine takes no capability.
+* **Refusals**: one rule, `fetch.tls`, with `detail.tag` from the engine (`tls-...`, `x509-...`). The tests hold: a
+  certificate for another name, a chain from an authority that is not trusted, a plain HTTP server answering on an `https`
+  port, a silent server cut at the deadline. In each, nothing of the request reaches the server.
+* **Redirects across schemes** are followed only to a baked entry of the same scheme as the `Location` says
+  (`http://h` never reaches an `https` entry, or the reverse); `h:443` and `h` are one authority for `https`.
+* **`data.scheme`** is `http` or `https`. A close-delimited body over TLS needs the peer's `close_notify`, as it should.
+* **Measured: the compile.** The build now compiles 17 more modules and takes about 2.5 minutes (the `install`/`manifest`
+  steps do not, the `build` does), and the suite builds twice, so it takes about 10 minutes. `tests/peer_test.cho` was
+  9 minutes before the address ranges moved to their own module (`fetchpeer`), and is 0.2 s now.
+* **Not done**: ALPN and resumption are off (not asked for); the memory of a handshake is not measured here (the engine
+  is opened with one work area); a host in `*.suffix` form cannot be `https` yet (the name check is against the baked name).
+

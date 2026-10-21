@@ -485,10 +485,14 @@ class Fetch(unittest.TestCase):
         self.assertEqual((rc, d["scheme"], d["body"], d["path"]), (0, "https", "over tls\n", "/landed"))
 
     def test_a_redirect_to_the_wrong_scheme_of_a_baked_host_is_refused(self):
-        self.serve(self.hop("http://localhost:%d/x" % TLS_OK))
-        rc, doc, _ = run(OPEN, "--max-redirects", "1", "get", "/")
-        self.assertEqual(self.rule(doc), "fetch.redirect-not-allowed")
-        self.serve(self.hop("https://127.0.0.1:%d/x" % PORT))
+        other = self.tls_server("good", TLS_OK)
+        for location in ("http://localhost:%d/x" % TLS_OK, "https://127.0.0.1:%d/x" % PORT):
+            s = self.serve(self.hop(location))
+            rc, doc, _ = run(OPEN, "--max-redirects", "1", "get", "/")
+            self.assertEqual(self.rule(doc), "fetch.redirect-not-allowed", location)
+            self.assertEqual([r for r in other.requests if r], [], location)
+            s.close()
+            time.sleep(0.05)
 
     def test_header_injection_is_refused(self):
         s = self.serve(lambda req: ok())

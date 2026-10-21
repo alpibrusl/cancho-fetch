@@ -104,6 +104,7 @@ TB = {"$ref": "#/$defs/text_or_bytes"}
 SCHEMAS = {
     "fetch": document("fetch", obj({
         "method": {"enum": ["get", "head"]},
+        "scheme": {"enum": ["http", "https"]},
         "host": {"type": "string"},
         "path": {"type": "string"},
         "status": {"type": "integer", "minimum": 100, "maximum": 599},
