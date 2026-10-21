@@ -98,7 +98,7 @@ def source(entries, allow_private, roots_pem, credentials=None):
             w("    region keyring {")
             w("        let token = alloc_slice[keyring](4096, byte_of(0));")
             w("        var got = 0 - 1;")
-            w('        borrow cred as &cf in {\n            got = fs_read(cf, "%s", token);\n        }' % cred[0])
+            w('        got = fs_read(cred, "%s", token);' % cred[0])
             w("        let used = fetchcore.secret_len(token, got);")
             w('        if !fetchcore.secret_ok(token[0..used]) {\n            bytes.zero(token);\n            return fetchcore.credential_unavailable(heap, "%s");\n        }' % cred[0])
             w("        match tcp_connect(out, fetchcore.dial_host(hosts(), %d), fetchcore.dial_port(hosts(), %d)) {" % (i, i))
