@@ -399,7 +399,7 @@ harness, not the tools). Times are wall milliseconds, memory the peak resident s
   envelope; in `--format text` it is 43 MB). The memory is bounded by the cap and the cap's ceiling is 16 MiB, so the worst case is
   about 50 MB, but "bounded" is not "small". The time is the per-byte decoding in `absorb` and the escaping of the body; a body
   of that size is outside what the tool is for (an answer an agent can read), and the cap says so.
-* **TLS costs `fetch` little here**: 3.4 ms against 3.5-ish for http at 1 KiB, and about 13 ms of CPU over plain http for 16 MB.
+* **TLS costs `fetch` little here**: a handshake adds about 1.5 ms to a 1 KiB request (3.4 ms against 1.9 ms), and about 13 ms of CPU over plain http for 16 MB.
   The bytes are right (16,000,000 over TLS with the same MD5 as the source). **I cannot explain the 16 MB figure from the engine's
   documented throughput** (`docs/tls-performance.md` in cancho; ChaCha20 at 135 MB/s would cost ~120 ms), and did not profile it.
   The certificates are P-256 ECDSA, the cheap case for the engine's anchor tables; an RSA or P-384 chain, which most public sites
