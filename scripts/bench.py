@@ -32,6 +32,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tests" / "conformance"))
 HTTP_PORT, TLS_PORT = 18090, 18453
 
+NODELAY = os.environ.get("BENCH_NODELAY", "1") == "1"  # Nagle + delayed ACK on the test server adds ~40 ms to a handshake
 SIZES = {"1k": 1024, "1m": 1024 * 1024, "16m": 16_000_000}
 
 
@@ -50,6 +51,8 @@ def serve(context_dir):
 
     def handle(conn, tls):
         try:
+            if NODELAY:
+                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             if tls:
                 conn = ctx.wrap_socket(conn, server_side=True)
             data = b""
@@ -113,6 +116,7 @@ def main():
     ap.add_argument("--binary")
     ap.add_argument("--runs", type=int, default=0, help="override the number of runs of every case")
     ap.add_argument("--json")
+    ap.add_argument("--only", help="run only the cases whose scheme/size contains this text, e.g. https/1k")
     a = ap.parse_args()
     global LAUNCHER
     work = pathlib.Path(tempfile.mkdtemp(prefix="fetch-bench-"))
@@ -135,7 +139,8 @@ def main():
     cases = []
     for scheme in ("http", "https"):
         for size, runs in (("1k", 40), ("1m", 15), ("16m", 7)):
-            cases.append((scheme, size, a.runs or runs))
+            if not a.only or a.only in "%s/%s" % (scheme, size):
+                cases.append((scheme, size, a.runs or runs))
     try:
         for scheme, size, runs in cases:
             if scheme == "http":
