@@ -405,6 +405,32 @@ fn read_some[&k, &q, &c, &e, &b](clock: &k Clock, poller: &!q Poller, conn: &!c 
     return 0 - 1;
 }
 
+// Is this peer one that a request should not reach? IPv4 per `private_v4`; IPv6: the unspecified, loopback and IPv4-compatible
+// block (::/96), IPv4-mapped (::ffff:0:0/96) and NAT64 (64:ff9b::/96) addresses by their embedded IPv4 address, unique-local
+// (fc00::/7), link-local (fe80::/10), multicast (ff00::/8) and the documentation prefix (2001:db8::/32).
+pub fn private_peer(who: addr.Peer) -> [] bool {
+    if addr.family(who) == 4 {
+        return private_v4(addr.word(who, 3));
+    }
+    let w0 = addr.word(who, 0);
+    let w1 = addr.word(who, 1);
+    let w2 = addr.word(who, 2);
+    let w3 = addr.word(who, 3);
+    if w0 == 0 && w1 == 0 && w2 == 0 {
+        return true;
+    }
+    if w0 == 0 && w1 == 0 && w2 == 65535 {
+        return private_v4(w3);
+    }
+    if w0 == 6619035 && w1 == 0 && w2 == 0 {
+        return private_v4(w3);
+    }
+    if w0 >> 25 == 126 || w0 >> 22 == 1018 || w0 >> 24 == 255 || w0 == 536939960 {
+        return true;
+    }
+    return false;
+}
+
 // Is this IPv4 address one that a request should not reach: loopback, private, link-local, unspecified, multicast,
 // reserved, carrier-grade NAT or the benchmarking range?
 fn private_v4(address: int) -> [] bool {
@@ -585,7 +611,7 @@ pub fn exchange[&h, &k, &p, &a](heap: &!h Heap, clock: &k Clock, conn: Conn, pla
                     let text_room = alloc_slice[r](64, byte_of(0));
                     let n = addr.text_port(who, text_room);
                     peer_text = buffer.append(heap, peer_text, text_room[0..n]);
-                    if addr.family(who) == 4 && private_v4(addr.word(who, 3)) && !allow_private {
+                    if private_peer(who) && !allow_private {
                         allowed = false;
                     }
                 }

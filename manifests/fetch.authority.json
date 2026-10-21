@@ -206,6 +206,7 @@
     "parse_nat",
     "plain_value",
     "private_ok",
+    "private_peer",
     "private_v4",
     "refusal_tag",
     "refused",
@@ -241,5 +242,5 @@
   ],
   "folded_operators": 52,
   "folded_calls": 0,
-  "functions": 270
+  "functions": 271
 }

@@ -272,5 +272,16 @@ class Fetch(unittest.TestCase):
         self.assertTrue(doc["authority"]["bounded"])
 
 
+class PeerRanges(unittest.TestCase):
+    def test_address_ranges(self):
+        """tests/peer_test.cho: the IPv4 and IPv6 ranges a build without --allow-private refuses (no IPv6 socket is
+        needed, so this is where the IPv6 ranges are held)."""
+        r = subprocess.run(["cancho", "test", "tests/peer_test.cho", "tools/fetch/fetchcore.cho", "generated/fetch/built.cho",
+                            *sorted(str(p) for p in (ROOT / "build" / "deps").glob("*.cho")), "--std"],
+                           cwd=ROOT, capture_output=True, text=True, timeout=300)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("4 passed; 0 failed", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

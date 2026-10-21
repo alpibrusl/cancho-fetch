@@ -238,8 +238,9 @@ manifest gate. `tests/conformance/test_fetch.py` runs two builds against loopbac
 * **`conn_peer` works on a client connection**, and the peer is in the envelope (`data.peer`). A build without
   `--allow-private` refuses a loopback peer with `fetch.peer-not-public` after connecting and before sending a byte
   (the test checks the server received nothing). The check is on the address the connection actually has, so it holds
-  for a name that resolves somewhere private. **Claim confirmed for IPv4**; the IPv6 ranges (`::1`, `fc00::/7`, `fe80::/10`,
-  mapped IPv4) are not in the check yet and are a step-2 item.
+  for a name that resolves somewhere private. **Claim confirmed for IPv4**; the IPv6 ranges are now in the check too (`::/96`, mapped IPv4 and NAT64 by
+  their embedded address, `fc00::/7`, `fe80::/10`, `ff00::/8`, `2001:db8::/32`), held by `tests/peer_test.cho` (`cancho test`),
+  because this environment has no IPv6 socket to dial; an end-to-end IPv6 dial is therefore **not** measured.
 * **The deadline holds after the name is resolved**: a server that accepts and goes silent is cut at the deadline
   (`--timeout-ms 500` answered in 503 ms), in the head and in the body. **The resolver caveat of §5.5 is not measured**:
   a resolver that never answers needs a network namespace this environment does not have, so the claim stays as written
@@ -252,6 +253,6 @@ manifest gate. `tests/conformance/test_fetch.py` runs two builds against loopbac
   wire module's `valid_extra` is correct for its own callers (they pass lines, not values); the lesson is that a
   caller building a line from a value must check the value.
 * **Not done in step 1**: CI (the pinned compiler has to be built at 597e6b0 first, minutes of work per run, to be
-  cached), the MCP server, IPv6 peer ranges, a build-time refusal of an `https://` entry (the generator rejects
+  cached), the MCP server, a build-time refusal of an `https://` entry (the generator rejects
   anything but `http://host[:port]`).
 
