@@ -23,6 +23,7 @@ import toolbox.describe;
 import toolbox.fail;
 import toolbox.out;
 import toolbox.text;
+import fetchtls;
 import http_client_wire;
 
 pub fn extra() -> [] &static [byte] {
@@ -399,72 +400,6 @@ pub fn refuse[&h, &i, &p](heap: &!h Heap, io: &!i Io, plan: &p Plan) -> [heap, i
     }
     buffer.drop(heap, empty);
     return status;
-}
-
-// ---------------------------------------------------------------- the connection ---
-//
-// A connection is made non-blocking and watched with a poller, so that the deadline holds for a server that stops
-// answering. (The name is resolved by `tcp_connect` before any of this, and a resolver that never answers is not bounded
-// by the deadline: docs/design.md section 5.5.)
-
-// Wait until the connection can be read (`want` 1) or written (`want` 2), or the deadline passes. 1 for ready, 0 for
-// the deadline.
-fn wait[&k, &q, &c, &e](clock: &k Clock, poller: &!q Poller, conn: &c Conn, want: int, events: &!e [int], deadline: int) -> [clock, poll] int {
-    let left = deadline - clock_ms(clock);
-    if left <= 0 {
-        return 0;
-    }
-    let changed = poller_modify(poller, conn, 1, want);
-    let n = poller_wait(poller, events, left);
-    if n == 0 {
-        return 0;
-    }
-    return 1;
-}
-
-// All of `data`, by the deadline. 0 when it went, -1 when the deadline passed, the errno otherwise.
-fn send_all[&k, &q, &c, &e, &d](clock: &k Clock, poller: &!q Poller, conn: &!c Conn, events: &!e [int], data: &d [byte], deadline: int) -> [clock, poll, conn_write] int {
-    var at = 0;
-    while at < len(data) {
-        match conn_write(conn, data[at..len(data)]) {
-            Sent::Wrote(n) => {
-                at = at + n;
-            }
-            Sent::Again => {
-                if wait(clock, poller, conn, 2, events, deadline) == 0 {
-                    return 0 - 1;
-                }
-            }
-            Sent::Failed(errno) => {
-                return errno;
-            }
-        }
-    }
-    return 0;
-}
-
-// Some bytes into `into`, by the deadline. The count (above 0), 0 when the peer closed, -1 for the deadline, and
-// -2 minus the errno when the read failed.
-fn read_some[&k, &q, &c, &e, &b](clock: &k Clock, poller: &!q Poller, conn: &!c Conn, events: &!e [int], into: &!b [byte], deadline: int) -> [clock, poll, conn_read] int {
-    while true {
-        match conn_read(conn, into) {
-            Received::Data(n) => {
-                return n;
-            }
-            Received::End => {
-                return 0;
-            }
-            Received::Again => {
-                if wait(clock, poller, conn, 1, events, deadline) == 0 {
-                    return 0 - 1;
-                }
-            }
-            Received::Failed(errno) => {
-                return 0 - 2 - errno;
-            }
-        }
-    }
-    return 0 - 1;
 }
 
 // Is this peer one that a request should not reach? IPv4 per `private_v4`; IPv6: the unspecified, loopback and IPv4-compatible
@@ -968,9 +903,9 @@ pub fn exchange[&h, &k, &p, &a, &l](heap: &!h Heap, clock: &k Clock, conn: Conn,
                     if size >= 0 {
                         borrow mut c as &!cm in {
                             borrow mut poller as &!pm in {
-                                sent = send_all(clock, pm, cm, events, req[0..size], deadline);
+                                sent = fetchtls.send_all(clock, pm, cm, events, req[0..size], deadline);
                                 if sent == 0 && len(sending) > 0 {
-                                    sent = send_all(clock, pm, cm, events, sending, deadline);
+                                    sent = fetchtls.send_all(clock, pm, cm, events, sending, deadline);
                                 }
                             }
                         }
@@ -993,7 +928,7 @@ pub fn exchange[&h, &k, &p, &a, &l](heap: &!h Heap, clock: &k Clock, conn: Conn,
                     var n = 0;
                     borrow mut c as &!cm in {
                         borrow mut poller as &!pm in {
-                            n = read_some(clock, pm, cm, events, acc[filled..24576], deadline);
+                            n = fetchtls.read_some(clock, pm, cm, events, acc[filled..24576], deadline);
                         }
                     }
                     if n == 0 - 1 {
@@ -1098,7 +1033,7 @@ pub fn exchange[&h, &k, &p, &a, &l](heap: &!h Heap, clock: &k Clock, conn: Conn,
                         var n = 0;
                         borrow mut c as &!cm in {
                             borrow mut poller as &!pm in {
-                                n = read_some(clock, pm, cm, events, rd, deadline);
+                                n = fetchtls.read_some(clock, pm, cm, events, rd, deadline);
                             }
                         }
                         if n == 0 - 1 {

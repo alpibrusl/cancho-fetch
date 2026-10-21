@@ -14,7 +14,7 @@ fn hosts() -> [] &static [byte] {
 }
 
 fn private_ok() -> [] bool {
-    return true;
+    return false;
 }
 
 fn via_0[&h, &k, &o, &p](heap: &!h Heap, clock: &k Clock, out: &o Out("127.0.0.1:18080"), plan: &p fetchcore.Plan) -> [heap, clock, poll, net_out("127.0.0.1:18080")] fetchcore.Answer {

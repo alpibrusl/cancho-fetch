@@ -1,0 +1,218 @@
+edition 11;
+
+module fetchtls;
+
+// `fetch`'s transport: a socket watched with a poller under a deadline, and over it, for an `https` host, the TLS client of
+// `packages/tls` (a pure engine: bytes in, bytes out, no capability). Every function here takes the deadline and answers a
+// number: a count or 0 for success, -1 for the deadline, a positive errno from a write, -2 minus the errno from a read, and
+// -999 when the TLS engine failed (`failure` asks it why). docs/design.md section 8.5.
+
+import tls;
+
+// ---------------------------------------------------------------- the connection ---
+//
+// A connection is made non-blocking and watched with a poller, so that the deadline holds for a server that stops
+// answering. (The name is resolved by `tcp_connect` before any of this, and a resolver that never answers is not bounded
+// by the deadline: docs/design.md section 5.5.)
+
+// Wait until the connection can be read (`want` 1) or written (`want` 2), or the deadline passes. 1 for ready, 0 for
+// the deadline.
+pub fn wait[&k, &q, &c, &e](clock: &k Clock, poller: &!q Poller, conn: &c Conn, want: int, events: &!e [int], deadline: int) -> [clock, poll] int {
+    let left = deadline - clock_ms(clock);
+    if left <= 0 {
+        return 0;
+    }
+    let changed = poller_modify(poller, conn, 1, want);
+    let n = poller_wait(poller, events, left);
+    if n == 0 {
+        return 0;
+    }
+    return 1;
+}
+
+// All of `data`, by the deadline. 0 when it went, -1 when the deadline passed, the errno otherwise.
+pub fn send_all[&k, &q, &c, &e, &d](clock: &k Clock, poller: &!q Poller, conn: &!c Conn, events: &!e [int], data: &d [byte], deadline: int) -> [clock, poll, conn_write] int {
+    var at = 0;
+    while at < len(data) {
+        match conn_write(conn, data[at..len(data)]) {
+            Sent::Wrote(n) => {
+                at = at + n;
+            }
+            Sent::Again => {
+                if wait(clock, poller, conn, 2, events, deadline) == 0 {
+                    return 0 - 1;
+                }
+            }
+            Sent::Failed(errno) => {
+                return errno;
+            }
+        }
+    }
+    return 0;
+}
+
+// Some bytes into `into`, by the deadline. The count (above 0), 0 when the peer closed, -1 for the deadline, and
+// -2 minus the errno when the read failed.
+pub fn read_some[&k, &q, &c, &e, &b](clock: &k Clock, poller: &!q Poller, conn: &!c Conn, events: &!e [int], into: &!b [byte], deadline: int) -> [clock, poll, conn_read] int {
+    while true {
+        match conn_read(conn, into) {
+            Received::Data(n) => {
+                return n;
+            }
+            Received::End => {
+                return 0;
+            }
+            Received::Again => {
+                if wait(clock, poller, conn, 1, events, deadline) == 0 {
+                    return 0 - 1;
+                }
+            }
+            Received::Failed(errno) => {
+                return 0 - 2 - errno;
+            }
+        }
+    }
+    return 0 - 1;
+}
+
+
+// Writes what the engine has queued to the socket.
+fn flush[&k, &q, &c, &e, &n, &b](clock: &k Clock, poller: &!q Poller, conn: &!c Conn, events: &!e [int], engine: &!n tls.Engine, scratch: &!b [byte], deadline: int) -> [clock, poll, conn_write] int {
+    while true {
+        let n = tls.take(engine, 0, scratch);
+        if n <= 0 {
+            return 0;
+        }
+        let r = send_all(clock, poller, conn, events, scratch[0..n], deadline);
+        if r != 0 {
+            return r;
+        }
+    }
+    return 0;
+}
+
+// What a read gave goes to the engine, all of it or until the engine refuses.
+fn feed_all[&n, &d](engine: &!n tls.Engine, data: &d [byte]) -> [] int {
+    var at = 0;
+    while at < len(data) {
+        let used = tls.feed(engine, 0, data[at..len(data)]);
+        if used < 0 {
+            return 0 - 999;
+        }
+        if used == 0 {
+            return at;
+        }
+        at = at + used;
+    }
+    return at;
+}
+
+// The handshake with `name` (also the name the certificate must carry) at `now` (Unix milliseconds). `cipher` holds what the
+// socket gave; `cur` is its [start, end). 0 once established.
+pub fn handshake[&k, &q, &c, &e, &n, &b, &w, &i, &h](clock: &k Clock, poller: &!q Poller, conn: &!c Conn, events: &!e [int], engine: &!n tls.Engine, name: &h [byte], now: int, scratch: &!b [byte], cipher: &!w [byte], cur: &!i [int], deadline: int) -> [clock, poll, conn_write, conn_read] int {
+    if tls.start(engine, 0, name, now) != 0 {
+        return 0 - 999;
+    }
+    while true {
+        let r = flush(clock, poller, conn, events, engine, scratch, deadline);
+        if r != 0 {
+            return r;
+        }
+        let ev = tls.event(engine, 0);
+        if ev == tls.event_established() {
+            return 0;
+        }
+        if ev == tls.event_failed() || ev == tls.event_closed() {
+            return 0 - 999;
+        }
+        if cur[0] < cur[1] {
+            let used = feed_all(engine, cipher[cur[0]..cur[1]]);
+            if used < 0 {
+                return used;
+            }
+            cur[0] = cur[0] + used;
+        } else {
+            let got = read_some(clock, poller, conn, events, cipher, deadline);
+            if got <= 0 {
+                if got == 0 {
+                    tls.eof(engine, 0);
+                    return 0 - 999;
+                }
+                return got;
+            }
+            cur[0] = 0;
+            cur[1] = got;
+        }
+    }
+    return 0 - 999;
+}
+
+// All of `data`, as records.
+pub fn put[&k, &q, &c, &e, &n, &b, &d](clock: &k Clock, poller: &!q Poller, conn: &!c Conn, events: &!e [int], engine: &!n tls.Engine, scratch: &!b [byte], data: &d [byte], deadline: int) -> [clock, poll, conn_write] int {
+    var at = 0;
+    var idle = 0;
+    while at < len(data) {
+        let m = tls.send(engine, 0, data[at..len(data)]);
+        if m < 0 {
+            return 0 - 999;
+        }
+        at = at + m;
+        let r = flush(clock, poller, conn, events, engine, scratch, deadline);
+        if r != 0 {
+            return r;
+        }
+        if m == 0 {
+            idle = idle + 1;
+            if idle > 4 {
+                return 0 - 999;
+            }
+        } else {
+            idle = 0;
+        }
+    }
+    return 0;
+}
+
+// Some plaintext into `into`: the count (above 0), 0 for the peer's close_notify, and the codes above.
+pub fn get[&k, &q, &c, &e, &n, &b, &w, &i, &o](clock: &k Clock, poller: &!q Poller, conn: &!c Conn, events: &!e [int], engine: &!n tls.Engine, scratch: &!b [byte], cipher: &!w [byte], cur: &!i [int], into: &!o [byte], deadline: int) -> [clock, poll, conn_write, conn_read] int {
+    while true {
+        let got = tls.recv(engine, 0, into);
+        if got > 0 {
+            return got;
+        }
+        if got == 0 {
+            return 0;
+        }
+        if got != tls.would_block() {
+            return 0 - 999;
+        }
+        let r = flush(clock, poller, conn, events, engine, scratch, deadline);
+        if r != 0 {
+            return r;
+        }
+        if cur[0] < cur[1] {
+            let used = feed_all(engine, cipher[cur[0]..cur[1]]);
+            if used < 0 {
+                return used;
+            }
+            cur[0] = cur[0] + used;
+        } else {
+            let more = read_some(clock, poller, conn, events, cipher, deadline);
+            if more < 0 {
+                return more;
+            }
+            if more == 0 {
+                tls.eof(engine, 0);
+            } else {
+                cur[0] = 0;
+                cur[1] = more;
+            }
+        }
+    }
+    return 0 - 999;
+}
+
+// The tag of why the engine failed.
+pub fn why[&n](engine: &n tls.Engine) -> [] &static [byte] {
+    return tls.refusal_tag(tls.failure(engine, 0));
+}
