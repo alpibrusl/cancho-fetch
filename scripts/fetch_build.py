@@ -18,19 +18,32 @@ import sys
 import procs as subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-ENTRY = re.compile(r"^http://([A-Za-z0-9.*-]+)(?::([0-9]{1,5}))?$")
+ENTRY = re.compile(r"^(https?)://([A-Za-z0-9.*-]+)(?::([0-9]{1,5}))?$")
 
 
 def bound(entry):
     m = ENTRY.match(entry)
     if not m:
-        sys.exit("fetch_build: %r is not http://host[:port]" % entry)
-    return "%s:%s" % (m.group(1), m.group(2) or "80")
+        sys.exit("fetch_build: %r is not http(s)://host[:port]" % entry)
+    return "%s:%s" % (m.group(2), m.group(3) or ("443" if m.group(1) == "https" else "80"))
 
 
-def source(entries, allow_private):
+def secure(entry):
+    return entry.startswith("https://")
+
+
+def literal(text):
+    """A cancho string literal (the six escapes manifest.literal knows)."""
+    import manifest
+    return manifest.literal(text)
+
+
+def source(entries, allow_private, roots_pem):
     bounds = [bound(e) for e in entries]
     n = len(bounds)
+    https = any(secure(e) for e in entries)
+    if https and not roots_pem:
+        sys.exit("fetch_build: an https:// host needs --roots FILE (the PEM bundle of the authorities it is trusted through)")
     rows = ", ".join('net_out("%s")' % b for b in bounds)
     out = []
     w = out.append
@@ -39,15 +52,16 @@ def source(entries, allow_private):
     w("// literal, so each one has its own function; everything else is tools/fetch/fetchcore.cho.\n")
     w("import std.buffer;\nimport std.io;\nimport toolbox.cli;\nimport toolbox.describe;\nimport fetchcore;\n")
     w("fn hosts() -> [] &static [byte] {\n    return \"%s\";\n}\n" % ";".join(entries))
+    w("fn roots() -> [] &static [byte] {\n    return %s;\n}\n" % literal(roots_pem if https else ""))
     w("fn private_ok() -> [] bool {\n    return %s;\n}\n" % ("true" if allow_private else "false"))
     for i, b in enumerate(bounds):
-        w('fn via_%d[&h, &k, &o, &p](heap: &!h Heap, clock: &k Clock, out: &o Out("%s"), plan: &p fetchcore.Plan) -> [heap, clock, poll, net_out("%s")] fetchcore.Answer {' % (i, b, b))
+        w('fn via_%d[&h, &k, &o, &p, &y](heap: &!h Heap, clock: &k Clock, out: &o Out("%s"), plan: &p fetchcore.Plan, entropy: &y [byte]) -> [heap, clock, poll, net_out("%s")] fetchcore.Answer {' % (i, b, b))
         w("    match tcp_connect(out, fetchcore.dial_host(hosts(), %d), fetchcore.dial_port(hosts(), %d)) {" % (i, i))
-        w("        Dialed::Ok(conn) => {\n            return fetchcore.exchange(heap, clock, conn, plan, fetchcore.authority(hosts(), %d), hosts(), private_ok());\n        }" % i)
+        w("        Dialed::Ok(conn) => {\n            return fetchcore.exchange(heap, clock, conn, plan, fetchcore.authority(hosts(), %d), hosts(), private_ok(), fetchcore.entry_secure(hosts(), %d), fetchcore.dial_host(hosts(), %d), roots(), entropy);\n        }" % (i, i, i))
         w("        Dialed::Failed(errno) => {\n            return fetchcore.dial_failed(heap, errno);\n        }\n    }\n}\n")
     params = ", ".join("o%d: &q%d Out(\"%s\")" % (i, i, b) for i, b in enumerate(bounds))
     gens = ", ".join("&q%d" % i for i in range(n))
-    w("fn run[&h, &g, &i, &k, %s](heap: &!h Heap, args: &g Args, io: &!i Io, clock: &k Clock, %s) -> [heap, args, io_write, err_write, clock, poll, %s] int {" % (gens, params, rows))
+    w("fn run[&h, &g, &i, &k, &z, %s](heap: &!h Heap, args: &g Args, io: &!i Io, clock: &k Clock, entropy: &z [byte], %s) -> [heap, args, io_write, err_write, clock, poll, %s] int {" % (gens, params, rows))
     w("    let which = cli.subcommand(args);\n    if which != 0 {\n        return describe.answer(heap, io, which, fetchcore.tool(), fetchcore.built());\n    }")
     w("    var plan = fetchcore.plan(heap, args, hosts());")
     w("    var refused = false;\n    borrow plan as &r in {\n        refused = fetchcore.refused(r);\n    }")
@@ -60,7 +74,7 @@ def source(entries, allow_private):
             w("            if pick == 0 {")
         else:
             w("            } else if pick == %d {" % i)
-        w("                answer = fetchcore.replace(heap, answer, via_%d(heap, clock, o%d, p));" % (i, i))
+        w("                answer = fetchcore.replace(heap, answer, via_%d(heap, clock, o%d, p, entropy));" % (i, i))
     w("            }\n        }")
     w("        var again = false;\n        borrow answer as &a in {\n            again = fetchcore.follows(a);\n        }")
     w("        if again {\n            plan = fetchcore.retarget(heap, plan, answer, hosts());\n            answer = fetchcore.nothing(heap);\n        } else {\n            finished = true;\n        }\n    }")
@@ -69,19 +83,26 @@ def source(entries, allow_private):
     narrow = "narrow(out, %s)" % ", ".join('"%s"' % b for b in bounds)
     w("fn main(world: World) -> [] int {")
     w("    let Split { io, ffi, fs, heap, args, out, ports, clock, signals, exec, tty } = split(world);")
-    for r in ("ffi", "fs", "ports", "signals", "exec", "tty"):
+    for r in ("ffi", "ports", "signals", "exec", "tty") + (() if https else ("fs",)):
         w("    release(%s);" % r)
+    if https:
+        w('    let urandom = narrow(fs, "/dev/urandom");')
     w("    let %s = %s;" % ("(%s)" % names if n > 1 else names, narrow))
     w("    var status = 0;\n    borrow mut heap as &!h in {\n        borrow args as &g in {\n            borrow mut io as &!i in {\n                borrow clock as &k in {")
-    ind = "                    "
+    w("                    region seed {\n                        let entropy = alloc_slice[seed](32, byte_of(0));")
+    if https:
+        w('                        borrow urandom as &uf in {\n                            fs_read(uf, "/dev/urandom", entropy);\n                        }')
+    ind = "                        "
     for i in range(n):
         w("%sborrow o%d as &r%d in {" % (ind, i, i))
         ind += "    "
-    w("%sstatus = run(h, g, i, k, %s);" % (ind, ", ".join("r%d" % i for i in range(n))))
+    w("%sstatus = run(h, g, i, k, entropy, %s);" % (ind, ", ".join("r%d" % i for i in range(n))))
     for i in range(n):
         ind = ind[:-4]
         w("%s}" % ind)
-    w("                }\n            }\n        }\n    }")
+    w("                    }\n                }\n            }\n        }\n    }")
+    if https:
+        w("    release(urandom);")
     for i in range(n):
         w("    release(o%d);" % i)
     w("    release(clock);\n    release(heap);\n    release(args);\n    release(io);\n    return status;\n}")
@@ -92,13 +113,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", action="append", required=True)
     ap.add_argument("--allow-private", action="store_true")
+    ap.add_argument("--roots", help="PEM bundle embedded as the trust store of every https host")
     ap.add_argument("--out", default="build/fetch")
     ap.add_argument("--no-manifest", action="store_true")
     a = ap.parse_args()
     (ROOT / "generated" / "fetch").mkdir(parents=True, exist_ok=True)
-    (ROOT / "generated" / "fetch" / "fetch.cho").write_text(source(a.host, a.allow_private))
+    (ROOT / "generated" / "fetch" / "fetch.cho").write_text(source(a.host, a.allow_private, pathlib.Path(a.roots).read_text() if a.roots else ""))
     cancho = os.environ.get("CANCHO", "cancho")
-    for cmd in ([cancho, "build"], [sys.executable, str(ROOT / "scripts" / "manifest.py")], [cancho, "build"]):
+    for cmd in ([cancho, "install"], [sys.executable, str(ROOT / "scripts" / "manifest.py")], [cancho, "build"]):
         if a.no_manifest and "manifest.py" in cmd[-1]:
             continue
         r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)

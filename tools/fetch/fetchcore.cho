@@ -23,11 +23,13 @@ import toolbox.describe;
 import toolbox.fail;
 import toolbox.out;
 import toolbox.text;
+import fetchpeer;
 import fetchtls;
+import tls;
 import http_client_wire;
 
 pub fn extra() -> [] &static [byte] {
-    return "fetch.method|2|never|the METHOD is not one this tool sends (get, head, post);fetch.redirect-not-allowed|2|never|a redirect points somewhere this build was not given;fetch.redirect-limit|8|never|more redirects than --max-redirects;fetch.body-required|2|never|post needs --body and --content-type;fetch.body-not-allowed|2|never|--body and --content-type belong to post;fetch.request-body-too-large|2|never|--body is larger than the 65536 bytes this tool sends;fetch.url-not-a-path|2|never|PATH is a request target (it begins with a single /), not a URL;fetch.path-malformed|2|never|PATH has a byte a request target may not hold;fetch.host-not-allowed|2|sometimes|--host names no host this build was given;fetch.host-required|2|sometimes|more than one host was baked in and --host was not given;fetch.header-malformed|2|never|--accept holds a byte a header value may not hold;fetch.connect-failed|8|never|the connection could not be made;fetch.peer-not-public|8|never|the host resolved to a private, loopback or link-local address and this build does not allow it;fetch.timeout|8|never|the deadline passed before the response was complete;fetch.body-too-large|8|never|the response body is larger than --max-bytes;fetch.response-malformed|8|never|the response is not one this tool reads (the detail names the framing rule);fetch.response-truncated|8|never|the connection ended before the response was complete";
+    return "fetch.method|2|never|the METHOD is not one this tool sends (get, head, post);fetch.tls|8|never|the TLS handshake or the record layer failed (detail.tag says why: a name, a chain, a protocol error);fetch.redirect-not-allowed|2|never|a redirect points somewhere this build was not given;fetch.redirect-limit|8|never|more redirects than --max-redirects;fetch.body-required|2|never|post needs --body and --content-type;fetch.body-not-allowed|2|never|--body and --content-type belong to post;fetch.request-body-too-large|2|never|--body is larger than the 65536 bytes this tool sends;fetch.url-not-a-path|2|never|PATH is a request target (it begins with a single /), not a URL;fetch.path-malformed|2|never|PATH has a byte a request target may not hold;fetch.host-not-allowed|2|sometimes|--host names no host this build was given;fetch.host-required|2|sometimes|more than one host was baked in and --host was not given;fetch.header-malformed|2|never|--accept holds a byte a header value may not hold;fetch.connect-failed|8|never|the connection could not be made;fetch.peer-not-public|8|never|the host resolved to a private, loopback or link-local address and this build does not allow it;fetch.timeout|8|never|the deadline passed before the response was complete;fetch.body-too-large|8|never|the response body is larger than --max-bytes;fetch.response-malformed|8|never|the response is not one this tool reads (the detail names the framing rule);fetch.response-truncated|8|never|the connection ended before the response was complete";
 }
 
 pub fn flag_table() -> [] &static [byte] {
@@ -35,7 +37,7 @@ pub fn flag_table() -> [] &static [byte] {
 }
 
 pub fn tool() -> [] describe.Tool {
-    return describe.Tool { name: "fetch", version: "0.1.0", summary: "Send one HTTP GET, HEAD or POST request to a host this build was given, and answer the status, the headers and the body. The hosts are in the binary and in its authority row; a request for any other host is refused before a socket opens. No redirects, credentials or cookies.", usage: "fetch [--host H] [--max-bytes N] [--timeout-ms N] [--accept TEXT] [--body TEXT --content-type TYPE] [--max-redirects N] [--format json|text] METHOD PATH", output: "document", schema: "fetch.v1", flags: flag_table(), operands: "METHOD|name|1|1|get, head or post;PATH|text|1|1|the request target: a path beginning with a single /, optionally with a query", rules: "args.unknown-flag;args.missing-value;args.bad-value;args.unexpected-value;args.duplicate-flag;args.missing-operand;args.too-many-operands;fetch.method;fetch.redirect-not-allowed;fetch.redirect-limit;fetch.body-required;fetch.body-not-allowed;fetch.request-body-too-large;fetch.url-not-a-path;fetch.path-malformed;fetch.host-not-allowed;fetch.host-required;fetch.header-malformed;fetch.connect-failed;fetch.peer-not-public;fetch.timeout;fetch.body-too-large;fetch.response-malformed;fetch.response-truncated", extra_rules: extra(), limits: "max-bytes|1048576|16777216;timeout-ms|10000|60000;max-redirects|0|5", reversibility: "irreversible-consequential", stdin: "no", guarantees: "bounded_memory" };
+    return describe.Tool { name: "fetch", version: "0.1.0", summary: "Send one HTTP GET, HEAD or POST request to a host this build was given, and answer the status, the headers and the body. The hosts are in the binary and in its authority row; a request for any other host is refused before a socket opens. No redirects, credentials or cookies.", usage: "fetch [--host H] [--max-bytes N] [--timeout-ms N] [--accept TEXT] [--body TEXT --content-type TYPE] [--max-redirects N] [--format json|text] METHOD PATH", output: "document", schema: "fetch.v1", flags: flag_table(), operands: "METHOD|name|1|1|get, head or post;PATH|text|1|1|the request target: a path beginning with a single /, optionally with a query", rules: "args.unknown-flag;args.missing-value;args.bad-value;args.unexpected-value;args.duplicate-flag;args.missing-operand;args.too-many-operands;fetch.method;fetch.redirect-not-allowed;fetch.redirect-limit;fetch.tls;fetch.body-required;fetch.body-not-allowed;fetch.request-body-too-large;fetch.url-not-a-path;fetch.path-malformed;fetch.host-not-allowed;fetch.host-required;fetch.header-malformed;fetch.connect-failed;fetch.peer-not-public;fetch.timeout;fetch.body-too-large;fetch.response-malformed;fetch.response-truncated", extra_rules: extra(), limits: "max-bytes|1048576|16777216;timeout-ms|10000|60000;max-redirects|0|5", reversibility: "irreversible-consequential", stdin: "no", guarantees: "bounded_memory" };
 }
 
 pub fn built() -> [] describe.Built {
@@ -402,58 +404,6 @@ pub fn refuse[&h, &i, &p](heap: &!h Heap, io: &!i Io, plan: &p Plan) -> [heap, i
     return status;
 }
 
-// Is this peer one that a request should not reach? IPv4 per `private_v4`; IPv6: the unspecified, loopback and IPv4-compatible
-// block (::/96), IPv4-mapped (::ffff:0:0/96) and NAT64 (64:ff9b::/96) addresses by their embedded IPv4 address, unique-local
-// (fc00::/7), link-local (fe80::/10), multicast (ff00::/8) and the documentation prefix (2001:db8::/32).
-pub fn private_peer(who: addr.Peer) -> [] bool {
-    if addr.family(who) == 4 {
-        return private_v4(addr.word(who, 3));
-    }
-    let w0 = addr.word(who, 0);
-    let w1 = addr.word(who, 1);
-    let w2 = addr.word(who, 2);
-    let w3 = addr.word(who, 3);
-    if w0 == 0 && w1 == 0 && w2 == 0 {
-        return true;
-    }
-    if w0 == 0 && w1 == 0 && w2 == 65535 {
-        return private_v4(w3);
-    }
-    if w0 == 6619035 && w1 == 0 && w2 == 0 {
-        return private_v4(w3);
-    }
-    if w0 >> 25 == 126 || w0 >> 22 == 1018 || w0 >> 24 == 255 || w0 == 536939960 {
-        return true;
-    }
-    return false;
-}
-
-// Is this IPv4 address one that a request should not reach: loopback, private, link-local, unspecified, multicast,
-// reserved, carrier-grade NAT or the benchmarking range?
-fn private_v4(address: int) -> [] bool {
-    let a = address >> 24 & 255;
-    let b = address >> 16 & 255;
-    if a == 0 || a == 10 || a == 127 || a >= 224 {
-        return true;
-    }
-    if a == 169 && b == 254 {
-        return true;
-    }
-    if a == 172 && b >= 16 && b <= 31 {
-        return true;
-    }
-    if a == 192 && b == 168 {
-        return true;
-    }
-    if a == 100 && b >= 64 && b <= 127 {
-        return true;
-    }
-    if a == 198 && (b == 18 || b == 19) {
-        return true;
-    }
-    return false;
-}
-
 // ---------------------------------------------------------------- the response ---
 //
 // State of the body being read, in a slice of integers.
@@ -562,17 +512,20 @@ fn lower(c: int) -> [] int {
 }
 
 // `host[:port]` without a default port, so `h` and `h:80` are one authority.
-fn trim_default_port[&a](x: &a [byte]) -> [] &a [byte] {
+fn trim_default_port[&a](x: &a [byte], secure: bool) -> [] &a [byte] {
     let n = len(x);
-    if n > 3 && int_of(x[n - 3]) == ':' && int_of(x[n - 2]) == '8' && int_of(x[n - 1]) == '0' {
+    if !secure && n > 3 && int_of(x[n - 3]) == ':' && int_of(x[n - 2]) == '8' && int_of(x[n - 1]) == '0' {
         return x[0..n - 3];
+    }
+    if secure && n > 4 && int_of(x[n - 4]) == ':' && int_of(x[n - 3]) == '4' && int_of(x[n - 2]) == '4' && int_of(x[n - 1]) == '3' {
+        return x[0..n - 4];
     }
     return x;
 }
 
-fn same_authority[&a, &b](x: &a [byte], y: &b [byte]) -> [] bool {
-    let p = trim_default_port(x);
-    let q = trim_default_port(y);
+fn same_authority[&a, &b](x: &a [byte], y: &b [byte], secure: bool) -> [] bool {
+    let p = trim_default_port(x, secure);
+    let q = trim_default_port(y, secure);
     if len(p) != len(q) {
         return false;
     }
@@ -587,10 +540,10 @@ fn same_authority[&a, &b](x: &a [byte], y: &b [byte]) -> [] bool {
 }
 
 // The baked entry whose authority is `auth`, or -1.
-fn entry_for[&l, &a](hosts: &l [byte], auth: &a [byte]) -> [] int {
+fn entry_for[&l, &a](hosts: &l [byte], auth: &a [byte], secure: bool) -> [] int {
     var k = 0;
     while k < host_count(hosts) {
-        if same_authority(authority(hosts, k), auth) {
+        if entry_secure(hosts, k) == secure && same_authority(authority(hosts, k), auth, secure) {
             return k;
         }
         k = k + 1;
@@ -613,15 +566,20 @@ fn locate[&h, &p, &l, &x](heap: &!h Heap, e: fail.Errors, plan: &p Plan, hosts: 
     var rest = loc[0..0];
     var reason = "";
     var ok = false;
-    if bytes.starts_with(loc, "http://") {
-        let after = loc[7..len(loc)];
+    if bytes.starts_with(loc, "http://") || bytes.starts_with(loc, "https://") {
+        let tls_scheme = bytes.starts_with(loc, "https://");
+        var skip = 7;
+        if tls_scheme {
+            skip = 8;
+        }
+        let after = loc[skip..len(loc)];
         var end = 0;
         while end < len(after) && int_of(after[end]) != '/' && int_of(after[end]) != '?' && int_of(after[end]) != '#' {
             end = end + 1;
         }
-        let k = entry_for(hosts, after[0..end]);
+        let k = entry_for(hosts, after[0..end], tls_scheme);
         if k < 0 {
-            reason = "the host is not one this build was given";
+            reason = "the host is not one this build was given, with this scheme";
         } else {
             host = k;
             rest = after[end..len(after)];
@@ -631,7 +589,7 @@ fn locate[&h, &p, &l, &x](heap: &!h Heap, e: fail.Errors, plan: &p Plan, hosts: 
         rest = loc;
         ok = true;
     } else {
-        reason = "only an absolute path or an http:// URL for a host this build was given is followed";
+        reason = "only an absolute path or an http(s):// URL for a host this build was given, with the scheme it was given, is followed";
     }
     if ok {
         var cut = len(rest);
@@ -748,6 +706,34 @@ pub fn replace[&h](heap: &!h Heap, old: Answer, fresh: Answer) -> [heap] Answer 
     return fresh;
 }
 
+// The error of a transport call that did not succeed: -1 the deadline, -999 the TLS engine (its tag says why), -998 no
+// trust roots or entropy, 1 or more an errno of a write, -2 or less an errno of a read, -3 a request that did not fit.
+fn transport_error[&h, &n](heap: &!h Heap, e: fail.Errors, code: int, engine: &n tls.Engine, timeout: int) -> [heap] fail.Errors {
+    if code == 0 - 1 {
+        return simple_detail(heap, e, "fetch.timeout", "the deadline passed before the exchange was complete", "raise --timeout-ms, up to 60000, or try the host later", "timeout_ms", timeout);
+    }
+    if code == 0 - 999 || code == 0 - 998 {
+        var tag = "tls-no-trust-roots";
+        if code == 0 - 999 {
+            tag = fetchtls.why(engine);
+        }
+        var w = fail.open_in(heap, extra(), "fetch.tls", "the TLS connection failed", "detail.tag says why; a certificate for another name or from an authority this build does not trust is not repaired by retrying");
+        w = fail.no_repair(heap, w);
+        w = fail.detail_open(heap, w);
+        w = json.put_key(heap, w, "tag");
+        w = json.put_string(heap, w, tag);
+        return fail.add(heap, e, w);
+    }
+    if code == 0 - 3 {
+        return simple_detail(heap, e, "fetch.header-malformed", "the request head did not fit", "send shorter headers or a shorter path", "bytes", 4096);
+    }
+    var errno = code;
+    if code < 0 - 1 {
+        errno = 0 - 2 - code;
+    }
+    return simple_detail(heap, e, "fetch.connect-failed", "the connection failed", "the server broke the connection; retry", "errno", errno);
+}
+
 // ---------------------------------------------------------------- the exchange ---
 
 pub struct Answer {
@@ -762,7 +748,7 @@ pub struct Answer {
 }
 
 // The envelope's data for a completed exchange.
-fn data[&h, &p, &a, &r, &x, &b, &q](heap: &!h Heap, plan: &p Plan, authority: &a [byte], status: int, reason: &r buffer.Buffer, headers: &x buffer.Buffer, body: &b buffer.Buffer, peer: &q buffer.Buffer, millis: int) -> [heap] buffer.Buffer {
+fn data[&h, &p, &a, &r, &x, &b, &q](heap: &!h Heap, plan: &p Plan, authority: &a [byte], secure: bool, status: int, reason: &r buffer.Buffer, headers: &x buffer.Buffer, body: &b buffer.Buffer, peer: &q buffer.Buffer, millis: int) -> [heap] buffer.Buffer {
     var w = json.begin_object(heap, json.writer(heap, 512));
     w = json.put_key(heap, w, "method");
     if plan.head {
@@ -771,6 +757,12 @@ fn data[&h, &p, &a, &r, &x, &b, &q](heap: &!h Heap, plan: &p Plan, authority: &a
         w = json.put_string(heap, w, "post");
     } else {
         w = json.put_string(heap, w, "get");
+    }
+    w = json.put_key(heap, w, "scheme");
+    if secure {
+        w = json.put_string(heap, w, "https");
+    } else {
+        w = json.put_string(heap, w, "http");
     }
     w = json.put_key(heap, w, "host");
     w = json.put_string(heap, w, authority);
@@ -805,7 +797,7 @@ fn data[&h, &p, &a, &r, &x, &b, &q](heap: &!h Heap, plan: &p Plan, authority: &a
 // Send the request over `conn`, read the response, close the connection. `authority` is the baked entry's `host[:port]`;
 // `allow_private` says whether a loopback, private or link-local peer may be talked to. Answers the errors, the
 // envelope's data, and (for `--format text`) the body.
-pub fn exchange[&h, &k, &p, &a, &l](heap: &!h Heap, clock: &k Clock, conn: Conn, plan: &p Plan, authority: &a [byte], hosts: &l [byte], allow_private: bool) -> [heap, clock, poll] Answer {
+pub fn exchange[&h, &k, &p, &a, &l, &m, &o, &y](heap: &!h Heap, clock: &k Clock, conn: Conn, plan: &p Plan, authority: &a [byte], hosts: &l [byte], allow_private: bool, secure: bool, name: &m [byte], roots: &o [byte], entropy: &y [byte]) -> [heap, clock, poll] Answer {
     var e = fail.empty_in(heap, extra());
     var payload = buffer.empty(heap, 1);
     var shown = buffer.empty(heap, 1);
@@ -829,7 +821,7 @@ pub fn exchange[&h, &k, &p, &a, &l](heap: &!h Heap, clock: &k Clock, conn: Conn,
                     let text_room = alloc_slice[r](64, byte_of(0));
                     let n = addr.text_port(who, text_room);
                     peer_text = buffer.append(heap, peer_text, text_room[0..n]);
-                    if private_peer(who) && !allow_private {
+                    if fetchpeer.private_peer(who) && !allow_private {
                         allowed = false;
                     }
                 }
@@ -867,8 +859,12 @@ pub fn exchange[&h, &k, &p, &a, &l](heap: &!h Heap, clock: &k Clock, conn: Conn,
         }
         Polling::Ok(pl) => {
             var poller = pl;
+            var engine = tls.open_with_areas(heap, 1, 1, 1);
             region r {
                 let events = alloc_slice[r](8, 0);
+                let scratch = alloc_slice[r](4096, byte_of(0));
+                let cipher = alloc_slice[r](8192, byte_of(0));
+                let cur = alloc_slice[r](2, 0);
                 let rd = alloc_slice[r](8192, byte_of(0));
                 let acc = alloc_slice[r](24576, byte_of(0));
                 let table = alloc_slice[r](http_client_wire.slots(64), 0);
@@ -898,14 +894,48 @@ pub fn exchange[&h, &k, &p, &a, &l](heap: &!h Heap, clock: &k Clock, conn: Conn,
                     all_extra = buffer.append(heap, all_extra, buffer.bytes(plan.content_type));
                 }
                 var sent = 0 - 3;
-                borrow all_extra as &ae in {
-                    let size = http_client_wire.write_head(req, method, target, authority, buffer.bytes(ae), framing, false, true);
-                    if size >= 0 {
+                if secure {
+                    var ready = 0;
+                    borrow mut engine as &!en in {
+                        let trusted = tls.trust(en, roots);
+                        let seeded = tls.seed(en, entropy);
+                        if trusted <= 0 || seeded != 0 {
+                            ready = 0 - 998;
+                        }
+                    }
+                    if ready == 0 {
                         borrow mut c as &!cm in {
                             borrow mut poller as &!pm in {
-                                sent = fetchtls.send_all(clock, pm, cm, events, req[0..size], deadline);
-                                if sent == 0 && len(sending) > 0 {
-                                    sent = fetchtls.send_all(clock, pm, cm, events, sending, deadline);
+                                borrow mut engine as &!en in {
+                                    ready = fetchtls.handshake(clock, pm, cm, events, en, name, clock_unix_ms(clock), scratch, cipher, cur, deadline);
+                                }
+                            }
+                        }
+                    }
+                    sent = ready;
+                } else {
+                    sent = 0;
+                }
+                if sent == 0 {
+                    sent = 0 - 3;
+                    borrow all_extra as &ae in {
+                        let size = http_client_wire.write_head(req, method, target, authority, buffer.bytes(ae), framing, false, true);
+                        if size >= 0 {
+                            borrow mut c as &!cm in {
+                                borrow mut poller as &!pm in {
+                                    if secure {
+                                        borrow mut engine as &!en in {
+                                            sent = fetchtls.put(clock, pm, cm, events, en, scratch, req[0..size], deadline);
+                                            if sent == 0 && len(sending) > 0 {
+                                                sent = fetchtls.put(clock, pm, cm, events, en, scratch, sending, deadline);
+                                            }
+                                        }
+                                    } else {
+                                        sent = fetchtls.send_all(clock, pm, cm, events, req[0..size], deadline);
+                                        if sent == 0 && len(sending) > 0 {
+                                            sent = fetchtls.send_all(clock, pm, cm, events, sending, deadline);
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -916,11 +946,10 @@ pub fn exchange[&h, &k, &p, &a, &l](heap: &!h Heap, clock: &k Clock, conn: Conn,
                 var head_done = false;
                 var phase = 0;
                 var body_start = 0;
-                if sent == 0 - 1 {
-                    e = simple_detail(heap, e, "fetch.timeout", "the deadline passed before the request was sent", "raise --timeout-ms, up to 60000, or try the host later", "timeout_ms", plan.timeout);
-                    phase = 9;
-                } else if sent != 0 {
-                    e = simple_detail(heap, e, "fetch.connect-failed", "the request could not be sent", "the connection broke while sending; retry", "errno", sent);
+                if sent != 0 {
+                    borrow engine as &er in {
+                        e = transport_error(heap, e, sent, er, plan.timeout);
+                    }
                     phase = 9;
                 }
                 // The head.
@@ -928,14 +957,22 @@ pub fn exchange[&h, &k, &p, &a, &l](heap: &!h Heap, clock: &k Clock, conn: Conn,
                     var n = 0;
                     borrow mut c as &!cm in {
                         borrow mut poller as &!pm in {
-                            n = fetchtls.read_some(clock, pm, cm, events, acc[filled..24576], deadline);
+                            if secure {
+                                borrow mut engine as &!en in {
+                                    n = fetchtls.get(clock, pm, cm, events, en, scratch, cipher, cur, acc[filled..24576], deadline);
+                                }
+                            } else {
+                                n = fetchtls.read_some(clock, pm, cm, events, acc[filled..24576], deadline);
+                            }
                         }
                     }
                     if n == 0 - 1 {
                         e = simple_detail(heap, e, "fetch.timeout", "the deadline passed before the response head arrived", "raise --timeout-ms, up to 60000, or try the host later", "timeout_ms", plan.timeout);
                         phase = 9;
                     } else if n < 0 - 1 {
-                        e = simple_detail(heap, e, "fetch.connect-failed", "the connection failed while reading the response", "the server broke the connection; retry", "errno", 0 - 2 - n);
+                        borrow engine as &er in {
+                            e = transport_error(heap, e, n, er, plan.timeout);
+                        }
                         phase = 9;
                     } else if n == 0 {
                         e = simple_detail(heap, e, "fetch.response-truncated", "the connection closed before the response head was complete", "the server closed early; retry", "bytes", filled);
@@ -1033,14 +1070,22 @@ pub fn exchange[&h, &k, &p, &a, &l](heap: &!h Heap, clock: &k Clock, conn: Conn,
                         var n = 0;
                         borrow mut c as &!cm in {
                             borrow mut poller as &!pm in {
-                                n = fetchtls.read_some(clock, pm, cm, events, rd, deadline);
+                                if secure {
+                                    borrow mut engine as &!en in {
+                                        n = fetchtls.get(clock, pm, cm, events, en, scratch, cipher, cur, rd, deadline);
+                                    }
+                                } else {
+                                    n = fetchtls.read_some(clock, pm, cm, events, rd, deadline);
+                                }
                             }
                         }
                         if n == 0 - 1 {
                             e = simple_detail(heap, e, "fetch.timeout", "the deadline passed before the response was complete", "raise --timeout-ms, up to 60000, or ask for less", "timeout_ms", plan.timeout);
                             live = false;
                         } else if n < 0 - 1 {
-                            e = simple_detail(heap, e, "fetch.connect-failed", "the connection failed while reading the response body", "the server broke the connection; retry", "errno", 0 - 2 - n);
+                            borrow engine as &er in {
+                                e = transport_error(heap, e, n, er, plan.timeout);
+                            }
                             live = false;
                         } else if n == 0 {
                             live = false;
@@ -1057,12 +1102,18 @@ pub fn exchange[&h, &k, &p, &a, &l](heap: &!h Heap, clock: &k Clock, conn: Conn,
                         e = response_error(heap, e, st[4], 0);
                     }
                 }
+                if secure {
+                    borrow mut engine as &!en in {
+                        tls.finish(en, 0);
+                    }
+                }
                 borrow c as &cq in {
                     borrow mut poller as &!pc in {
                         poller_remove(pc, cq);
                     }
                 }
             }
+            tls.close(heap, engine);
             poller_close(poller);
         }
     }
@@ -1078,7 +1129,7 @@ pub fn exchange[&h, &k, &p, &a, &l](heap: &!h Heap, clock: &k Clock, conn: Conn,
             borrow shown_headers as &hb in {
                 borrow body as &bb in {
                     borrow peer_text as &pb in {
-                        payload = data(heap, plan, authority, status_code, rb, hb, bb, pb, millis);
+                        payload = data(heap, plan, authority, secure, status_code, rb, hb, bb, pb, millis);
                     }
                 }
             }
@@ -1096,7 +1147,20 @@ pub fn exchange[&h, &k, &p, &a, &l](heap: &!h Heap, clock: &k Clock, conn: Conn,
 
 // ---------------------------------------------------------------- dialing and answering ---
 
-// The host to dial for entry `k`, and its port (the entry's, else 80).
+// Is entry `k` an `https://` one?
+pub fn entry_secure[&l](list: &l [byte], k: int) -> [] bool {
+    var at = 0;
+    var seen = 0;
+    while seen < k && at < len(list) {
+        if int_of(list[at]) == ';' {
+            seen = seen + 1;
+        }
+        at = at + 1;
+    }
+    return bytes.starts_with(list[at..len(list)], "https://");
+}
+
+// The host to dial for entry `k`, and its port (the entry's, else the scheme's).
 pub fn dial_host[&l](list: &l [byte], k: int) -> [] &l [byte] {
     return host_part(list, k);
 }
@@ -1112,6 +1176,9 @@ pub fn dial_port[&l](list: &l [byte], k: int) -> [] int {
         i = i + 1;
     }
     if colon == z {
+        if entry_secure(list, k) {
+            return 443;
+        }
         return 80;
     }
     var port = 0;

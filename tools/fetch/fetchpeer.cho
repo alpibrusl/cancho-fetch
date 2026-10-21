@@ -1,0 +1,57 @@
+edition 11;
+
+module fetchpeer;
+
+import std.addr;
+
+// Is this peer one that a request should not reach? IPv4 per `private_v4`; IPv6: the unspecified, loopback and IPv4-compatible
+// block (::/96), IPv4-mapped (::ffff:0:0/96) and NAT64 (64:ff9b::/96) addresses by their embedded IPv4 address, unique-local
+// (fc00::/7), link-local (fe80::/10), multicast (ff00::/8) and the documentation prefix (2001:db8::/32).
+pub fn private_peer(who: addr.Peer) -> [] bool {
+    if addr.family(who) == 4 {
+        return private_v4(addr.word(who, 3));
+    }
+    let w0 = addr.word(who, 0);
+    let w1 = addr.word(who, 1);
+    let w2 = addr.word(who, 2);
+    let w3 = addr.word(who, 3);
+    if w0 == 0 && w1 == 0 && w2 == 0 {
+        return true;
+    }
+    if w0 == 0 && w1 == 0 && w2 == 65535 {
+        return private_v4(w3);
+    }
+    if w0 == 6619035 && w1 == 0 && w2 == 0 {
+        return private_v4(w3);
+    }
+    if w0 >> 25 == 126 || w0 >> 22 == 1018 || w0 >> 24 == 255 || w0 == 536939960 {
+        return true;
+    }
+    return false;
+}
+
+// Is this IPv4 address one that a request should not reach: loopback, private, link-local, unspecified, multicast,
+// reserved, carrier-grade NAT or the benchmarking range?
+fn private_v4(address: int) -> [] bool {
+    let a = address >> 24 & 255;
+    let b = address >> 16 & 255;
+    if a == 0 || a == 10 || a == 127 || a >= 224 {
+        return true;
+    }
+    if a == 169 && b == 254 {
+        return true;
+    }
+    if a == 172 && b >= 16 && b <= 31 {
+        return true;
+    }
+    if a == 192 && b == 168 {
+        return true;
+    }
+    if a == 100 && b >= 64 && b <= 127 {
+        return true;
+    }
+    if a == 198 && (b == 18 || b == 19) {
+        return true;
+    }
+    return false;
+}

@@ -6,6 +6,8 @@ import os
 import pathlib
 import shutil
 import socket
+import ssl
+import subprocess as _plain  # openssl for the certificates only; every other child goes through procs
 import sys
 import tempfile
 import threading
@@ -17,13 +19,50 @@ import procs as subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PORT = 18080
-DEAD = 18081  # baked, and nothing listens
+DEAD = 18081  # baked, and nothing listens (unless a test starts a server there)
+TLS_OK = 18443      # https://localhost, a certificate for localhost from the trusted authority
+TLS_NAME = 18444    # a certificate from the trusted authority for another name
+TLS_CA = 18445      # a certificate for localhost from an authority that is not trusted
 TMP = pathlib.Path(tempfile.mkdtemp(prefix="fetch-test-"))
-HOSTS = ["--host", "http://127.0.0.1:%d" % PORT, "--host", "http://127.0.0.1:%d" % DEAD]
+ENTRIES = ["http://127.0.0.1:%d" % PORT, "http://127.0.0.1:%d" % DEAD, "https://localhost:%d" % TLS_OK,
+           "https://localhost:%d" % TLS_NAME, "https://localhost:%d" % TLS_CA]
+ALLOWED = ["127.0.0.1:%d" % PORT, "127.0.0.1:%d" % DEAD, "localhost:%d" % TLS_OK, "localhost:%d" % TLS_NAME, "localhost:%d" % TLS_CA]
+HOSTS = [x for e in ENTRIES for x in ("--host", e)]
+
+
+def make_certificates(where):
+    """Two authorities, three leaves; returns the roots file (the first authority only) and a context per leaf."""
+    def run_openssl(*args):
+        r = _plain.run(["openssl", *args], cwd=where, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError("openssl %s: %s" % (" ".join(args), r.stderr))
+
+    for ca in ("ca1", "ca2"):
+        run_openssl("req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-keyout", ca + ".key",
+                    "-out", ca + ".pem", "-days", "30", "-subj", "/CN=test authority " + ca,
+                    "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign")
+    for name, ca, dns in (("good", "ca1", "localhost"), ("name", "ca1", "wrong.example"), ("untrusted", "ca2", "localhost")):
+        run_openssl("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-keyout", name + ".key",
+                    "-out", name + ".csr", "-subj", "/CN=" + dns)
+        (where / (name + ".ext")).write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\n"
+                                              "extendedKeyUsage=serverAuth\nsubjectAltName=DNS:%s\n" % dns)
+        run_openssl("x509", "-req", "-in", name + ".csr", "-CA", ca + ".pem", "-CAkey", ca + ".key", "-CAcreateserial",
+                    "-out", name + ".pem", "-days", "30", "-extfile", name + ".ext")
+    contexts = {}
+    for name in ("good", "name", "untrusted"):
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.load_cert_chain(str(where / (name + ".pem")), str(where / (name + ".key")))
+        contexts[name] = ctx
+    return str(where / "ca1.pem"), contexts
+
+
+ROOTS = None
+CONTEXTS = None
 
 
 def build(name, *extra):
-    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "fetch_build.py"), *HOSTS, *extra],
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "fetch_build.py"), *HOSTS, "--roots", ROOTS, *extra],
                        cwd=ROOT, capture_output=True, text=True, timeout=600)
     if r.returncode != 0:
         raise RuntimeError("build failed:\n" + r.stdout + r.stderr)
@@ -36,7 +75,8 @@ OPEN = STRICT = None
 
 
 def setUpModule():
-    global OPEN, STRICT
+    global OPEN, STRICT, ROOTS, CONTEXTS
+    ROOTS, CONTEXTS = make_certificates(TMP)
     STRICT = build("strict")
     OPEN = build("open", "--allow-private")
 
@@ -48,7 +88,8 @@ def tearDownModule():
 class Server:
     """Answers each connection with `reply(request_bytes) -> bytes` (or None for silence), and records the requests."""
 
-    def __init__(self, reply, hold=0.0, port=PORT):
+    def __init__(self, reply, hold=0.0, port=PORT, context=None):
+        self.context = context
         self.reply = reply
         self.hold = hold
         self.requests = []
@@ -73,6 +114,8 @@ class Server:
         conn.settimeout(5)
         data = b""
         try:
+            if self.context is not None:
+                conn = self.context.wrap_socket(conn, server_side=True)
             while b"\r\n\r\n" not in data:
                 chunk = conn.recv(4096)
                 if not chunk:
@@ -94,6 +137,8 @@ class Server:
                 time.sleep(self.hold)
             if out is not None:
                 conn.sendall(out)
+            if self.context is not None:
+                conn.unwrap()  # close_notify
         except OSError:
             pass
         finally:
@@ -240,7 +285,7 @@ class Fetch(unittest.TestCase):
         s = self.serve(lambda req: ok())
         rc, doc, _ = run(OPEN, "--host", "example.com", "get", "/")
         self.assertEqual((rc, self.rule(doc)), (2, "fetch.host-not-allowed"))
-        self.assertEqual(doc["error"]["detail"]["allowed"], ["127.0.0.1:%d" % PORT, "127.0.0.1:%d" % DEAD])
+        self.assertEqual(doc["error"]["detail"]["allowed"], ALLOWED)
         self.assertEqual(s.requests, [])
 
     def test_url_is_not_a_path(self):
@@ -373,6 +418,78 @@ class Fetch(unittest.TestCase):
         rc, doc, _ = run(OPEN, "--max-redirects", "6", "get", "/")
         self.assertEqual(doc["error"]["rule"], "args.bad-value")
 
+    # ---- https: the pure TLS client of packages/tls, a trust store baked in at build time
+    def tls_server(self, context, port, reply=None, **kw):
+        s = Server(reply or (lambda req: ok(b"over tls\n")), port=port, context=CONTEXTS[context], **kw)
+        self.addCleanup(s.close)
+        return s
+
+    def test_https_get(self):
+        s = self.tls_server("good", TLS_OK)
+        rc, doc, _ = run(OPEN, "--host", "localhost:%d" % TLS_OK, "get", "/secure?x=1")
+        self.assertEqual(rc, 0, doc)
+        d = doc["data"]
+        self.assertEqual((d["scheme"], d["status"], d["body"], d["host"]), ("https", 200, "over tls\n", "localhost:%d" % TLS_OK))
+        self.assertTrue(s.requests[0].startswith(b"GET /secure?x=1 HTTP/1.1\r\n"), s.requests)
+        self.assertIn(b"Host: localhost:%d\r\n" % TLS_OK, s.requests[0])
+
+    def test_https_post_and_chunked(self):
+        def reply(req):
+            if req.startswith(b"POST"):
+                return b"HTTP/1.1 201 Created\r\nContent-Length: 2\r\n\r\nok"
+            return b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n6\r\nhello \r\n5\r\nworld\r\n0\r\n\r\n"
+        s = self.tls_server("good", TLS_OK, reply)
+        h = ("--host", "localhost:%d" % TLS_OK)
+        rc, doc, _ = run(OPEN, *h, "--body", "secret payload", "--content-type", "text/plain", "post", "/p")
+        self.assertEqual((doc["data"]["status"], doc["data"]["method"]), (201, "post"))
+        self.assertTrue(s.requests[0].endswith(b"secret payload"))
+        rc, doc, _ = run(OPEN, *h, "get", "/c")
+        self.assertEqual(doc["data"]["body"], "hello world")
+
+    def test_https_a_certificate_for_another_name_is_refused(self):
+        s = self.tls_server("name", TLS_NAME)
+        rc, doc, _ = run(OPEN, "--host", "localhost:%d" % TLS_NAME, "get", "/")
+        self.assertEqual((rc, self.rule(doc)), (8, "fetch.tls"))
+        self.assertTrue(doc["error"]["detail"]["tag"].startswith("x509") or "name" in doc["error"]["detail"]["tag"], doc)
+        self.assertEqual([r for r in s.requests if r], [])
+
+    def test_https_an_untrusted_authority_is_refused(self):
+        s = self.tls_server("untrusted", TLS_CA)
+        rc, doc, _ = run(OPEN, "--host", "localhost:%d" % TLS_CA, "get", "/")
+        self.assertEqual(self.rule(doc), "fetch.tls")
+        self.assertEqual([r for r in s.requests if r], [])
+
+    def test_https_to_a_plain_http_server_is_refused(self):
+        s = self.serve(lambda req: ok(), port=TLS_OK)
+        rc, doc, _ = run(OPEN, "--host", "localhost:%d" % TLS_OK, "get", "/")
+        self.assertEqual(self.rule(doc), "fetch.tls")
+
+    def test_https_silent_server_is_cut_at_the_deadline(self):
+        raw = Server(lambda req: None, hold=4, port=TLS_OK)
+        self.addCleanup(raw.close)
+        t = time.time()
+        rc, doc, _ = run(OPEN, "--host", "localhost:%d" % TLS_OK, "--timeout-ms", "500", "get", "/")
+        self.assertIn(self.rule(doc), ("fetch.timeout", "fetch.tls"))
+        self.assertLess(time.time() - t, 3.0)
+
+    def test_https_body_cap(self):
+        self.tls_server("good", TLS_OK, lambda req: ok(b"y" * 5000))
+        rc, doc, _ = run(OPEN, "--host", "localhost:%d" % TLS_OK, "--max-bytes", "100", "get", "/")
+        self.assertEqual(self.rule(doc), "fetch.body-too-large")
+
+    def test_a_redirect_from_http_to_a_baked_https_host(self):
+        self.tls_server("good", TLS_OK)
+        self.serve(self.hop("https://localhost:%d/landed" % TLS_OK))
+        rc, doc, _ = run(OPEN, "--max-redirects", "1", "get", "/")
+        d = doc["data"]
+        self.assertEqual((rc, d["scheme"], d["body"], d["path"]), (0, "https", "over tls\n", "/landed"))
+
+    def test_a_redirect_to_the_wrong_scheme_of_a_baked_host_is_refused(self):
+        self.serve(self.hop("http://localhost:%d/x" % TLS_OK))
+        rc, doc, _ = run(OPEN, "--max-redirects", "1", "get", "/")
+        self.assertEqual(self.rule(doc), "fetch.redirect-not-allowed")
+        self.serve(self.hop("https://127.0.0.1:%d/x" % PORT))
+
     def test_header_injection_is_refused(self):
         s = self.serve(lambda req: ok())
         rc, doc, _ = run(OPEN, "--accept", "text/plain\r\nX-Evil: 1", "get", "/")
@@ -404,7 +521,8 @@ class Fetch(unittest.TestCase):
     def test_introspect_authority_is_the_baked_hosts(self):
         rc, doc, _ = run(STRICT, "introspect")
         rows = {(l["name"], l["argument"]) for l in doc["authority"]["labels"]}
-        self.assertEqual({r[1] for r in rows if r[0] == "net_out"}, {"127.0.0.1:%d" % PORT, "127.0.0.1:%d" % DEAD})
+        self.assertEqual({r[1] for r in rows if r[0] == "net_out"}, set(ALLOWED))
+        self.assertEqual({r[1] for r in rows if r[0] == "fs_read"}, {"/dev/urandom"})  # the TLS seed, and nothing else
         names = {r[0] for r in rows}
         self.assertFalse(names & {"ffi", "net_in", "file_write", "dir_write", "exec"}, names)
         self.assertTrue(doc["authority"]["bounded"])
@@ -414,8 +532,7 @@ class PeerRanges(unittest.TestCase):
     def test_address_ranges(self):
         """tests/peer_test.cho: the IPv4 and IPv6 ranges a build without --allow-private refuses (no IPv6 socket is
         needed, so this is where the IPv6 ranges are held)."""
-        r = subprocess.run(["cancho", "test", "tests/peer_test.cho", "tools/fetch/fetchcore.cho", "tools/fetch/fetchtls.cho", "generated/fetch/built.cho",
-                            *sorted(str(p) for p in (ROOT / "build" / "deps").glob("*.cho")), "--std"],
+        r = subprocess.run(["cancho", "test", "tests/peer_test.cho", "tools/fetch/fetchpeer.cho", "--std"],
                            cwd=ROOT, capture_output=True, text=True, timeout=300)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("4 passed; 0 failed", r.stdout)
