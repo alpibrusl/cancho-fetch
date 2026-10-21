@@ -256,3 +256,22 @@ manifest gate. `tests/conformance/test_fetch.py` runs two builds against loopbac
   cached), the MCP server, a build-time refusal of an `https://` entry (the generator rejects
   anything but `http://host[:port]`).
 
+## 8.2 Step 3 as built: `post`
+
+`fetch post PATH --body TEXT --content-type TYPE`. Decisions, each with its reason:
+
+* **`--body` only; `--body-stdin` is not built.** Reading standard input would add `io_read` to the authority row for
+  a convenience; an argument carries the request bodies an agent writes (JSON, a form), up to **65,536 bytes**
+  (`fetch.request-body-too-large` beyond), and the row stays as it was. A body from stdin is a later step if a caller needs
+  one over 64 KiB, and the row will say so when it does.
+* **`--content-type` is required with `--body`** (`fetch.body-required` names both). A default type would be a guess that
+  is right for one server and silently wrong for the next; the error's hint gives an example, which is what a caller
+  needs to repair it.
+* **`get` and `head` with `--body` are refused** (`fetch.body-not-allowed`), not ignored: a body that was never sent is a
+  surprise nobody asked for.
+* The body is sent after the head, under the same deadline; framing is `Content-Length` (the body is whole in memory,
+  capped), never chunked. Header injection through `--content-type` is refused the same way as through `--accept`.
+* The authority row is unchanged by `post` (the same `net_out` hosts, no `io_read`). `introspect`'s reversibility stays
+  `irreversible-consequential` for the tool as a whole; `get`/`head` are idempotent and `post` is not, which the MCP
+  annotations (step 4) will say per method.
+

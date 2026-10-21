@@ -78,6 +78,16 @@ class Server:
                 if not chunk:
                     break
                 data += chunk
+            head, _, rest = data.partition(b"\r\n\r\n")
+            for line in head.split(b"\r\n")[1:]:
+                if line.lower().startswith(b"content-length:"):
+                    want = int(line.split(b":")[1])
+                    while len(rest) < want:
+                        more = conn.recv(65536)
+                        if not more:
+                            break
+                        rest += more
+                    data = head + b"\r\n\r\n" + rest
             self.requests.append(data)
             out = self.reply(data)
             if self.hold:
@@ -241,7 +251,45 @@ class Fetch(unittest.TestCase):
         s = self.serve(lambda req: ok())
         self.assertEqual(self.rule(run(OPEN, "get", "/a b")[1]), "fetch.path-malformed")
         self.assertEqual(self.rule(run(OPEN, "get", "relative")[1]), "fetch.path-malformed")
-        self.assertEqual(self.rule(run(OPEN, "post", "/")[1]), "fetch.method")
+        self.assertEqual(self.rule(run(OPEN, "put", "/")[1]), "fetch.method")
+        self.assertEqual(s.requests, [])
+
+    def test_post(self):
+        s = self.serve(lambda req: b"HTTP/1.1 201 Created\r\nContent-Length: 2\r\n\r\nok")
+        rc, doc, _ = run(OPEN, "--body", '{"a":1}', "--content-type", "application/json", "post", "/items")
+        self.assertEqual((rc, doc["data"]["status"], doc["data"]["method"], doc["data"]["body"]), (0, 201, "post", "ok"))
+        req = s.requests[0]
+        self.assertTrue(req.startswith(b"POST /items HTTP/1.1\r\n"), req)
+        self.assertIn(b"Content-Length: 7\r\n", req)
+        self.assertIn(b"Content-Type: application/json\r\n", req)
+        self.assertTrue(req.endswith(b"\r\n\r\n" + b'{"a":1}'), req)
+
+    def test_post_is_one_request_with_the_whole_body(self):
+        s = self.serve(lambda req: ok())
+        body = "x" * 60000
+        rc, doc, _ = run(OPEN, "--body", body, "--content-type", "text/plain", "post", "/")
+        self.assertEqual(rc, 0, doc)
+        self.assertEqual(len(s.requests), 1)
+        self.assertTrue(s.requests[0].endswith(body.encode()))
+
+    def test_post_needs_a_body_and_a_type(self):
+        s = self.serve(lambda req: ok())
+        self.assertEqual(self.rule(run(OPEN, "post", "/")[1]), "fetch.body-required")
+        self.assertEqual(self.rule(run(OPEN, "--body", "x", "post", "/")[1]), "fetch.body-required")
+        self.assertEqual(self.rule(run(OPEN, "--content-type", "text/plain", "post", "/")[1]), "fetch.body-required")
+        self.assertEqual(s.requests, [])
+
+    def test_get_and_head_send_no_body(self):
+        s = self.serve(lambda req: ok())
+        for m in ("get", "head"):
+            self.assertEqual(self.rule(run(OPEN, "--body", "x", "--content-type", "text/plain", m, "/")[1]), "fetch.body-not-allowed")
+        self.assertEqual(s.requests, [])
+
+    def test_post_body_cap_and_content_type_injection(self):
+        s = self.serve(lambda req: ok())
+        big = "x" * 65537
+        self.assertEqual(self.rule(run(OPEN, "--body", big, "--content-type", "text/plain", "post", "/")[1]), "fetch.request-body-too-large")
+        self.assertEqual(self.rule(run(OPEN, "--body", "x", "--content-type", "a/b\r\nX-Evil: 1", "post", "/")[1]), "fetch.header-malformed")
         self.assertEqual(s.requests, [])
 
     def test_header_injection_is_refused(self):

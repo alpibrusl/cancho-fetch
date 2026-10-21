@@ -26,15 +26,15 @@ import toolbox.text;
 import http_client_wire;
 
 pub fn extra() -> [] &static [byte] {
-    return "fetch.method|2|never|the METHOD is not one this tool sends (get, head);fetch.url-not-a-path|2|never|PATH is a request target (it begins with a single /), not a URL;fetch.path-malformed|2|never|PATH has a byte a request target may not hold;fetch.host-not-allowed|2|sometimes|--host names no host this build was given;fetch.host-required|2|sometimes|more than one host was baked in and --host was not given;fetch.header-malformed|2|never|--accept holds a byte a header value may not hold;fetch.connect-failed|8|never|the connection could not be made;fetch.peer-not-public|8|never|the host resolved to a private, loopback or link-local address and this build does not allow it;fetch.timeout|8|never|the deadline passed before the response was complete;fetch.body-too-large|8|never|the response body is larger than --max-bytes;fetch.response-malformed|8|never|the response is not one this tool reads (the detail names the framing rule);fetch.response-truncated|8|never|the connection ended before the response was complete";
+    return "fetch.method|2|never|the METHOD is not one this tool sends (get, head, post);fetch.body-required|2|never|post needs --body and --content-type;fetch.body-not-allowed|2|never|--body and --content-type belong to post;fetch.request-body-too-large|2|never|--body is larger than the 65536 bytes this tool sends;fetch.url-not-a-path|2|never|PATH is a request target (it begins with a single /), not a URL;fetch.path-malformed|2|never|PATH has a byte a request target may not hold;fetch.host-not-allowed|2|sometimes|--host names no host this build was given;fetch.host-required|2|sometimes|more than one host was baked in and --host was not given;fetch.header-malformed|2|never|--accept holds a byte a header value may not hold;fetch.connect-failed|8|never|the connection could not be made;fetch.peer-not-public|8|never|the host resolved to a private, loopback or link-local address and this build does not allow it;fetch.timeout|8|never|the deadline passed before the response was complete;fetch.body-too-large|8|never|the response body is larger than --max-bytes;fetch.response-malformed|8|never|the response is not one this tool reads (the detail names the framing rule);fetch.response-truncated|8|never|the connection ended before the response was complete";
 }
 
 pub fn flag_table() -> [] &static [byte] {
-    return "host||text|none||which baked host to use: the host (or host:port) of one of this build's allowed entries; required when more than one is baked in;max-bytes||nat|none|1048576|the most response body bytes accepted (1 to 16777216); a larger body is fetch.body-too-large;timeout-ms||nat|none|10000|the deadline for the whole request once the name has resolved, in milliseconds (1 to 60000);accept||text|none||the Accept request header;format||choice:json/text|none|json|json for an envelope, text writes the response body to standard output";
+    return "host||text|none||which baked host to use: the host (or host:port) of one of this build's allowed entries; required when more than one is baked in;max-bytes||nat|none|1048576|the most response body bytes accepted (1 to 16777216); a larger body is fetch.body-too-large;timeout-ms||nat|none|10000|the deadline for the whole request once the name has resolved, in milliseconds (1 to 60000);accept||text|none||the Accept request header;body||text|none||the request body, for post (at most 65536 bytes);content-type||text|none||the Content-Type of the request body, required with --body;format||choice:json/text|none|json|json for an envelope, text writes the response body to standard output";
 }
 
 pub fn tool() -> [] describe.Tool {
-    return describe.Tool { name: "fetch", version: "0.1.0", summary: "Send one HTTP GET or HEAD request to a host this build was given, and answer the status, the headers and the body. The hosts are in the binary and in its authority row; a request for any other host is refused before a socket opens. No redirects, credentials or cookies.", usage: "fetch [--host H] [--max-bytes N] [--timeout-ms N] [--accept TEXT] [--format json|text] METHOD PATH", output: "document", schema: "fetch.v1", flags: flag_table(), operands: "METHOD|name|1|1|get or head;PATH|text|1|1|the request target: a path beginning with a single /, optionally with a query", rules: "args.unknown-flag;args.missing-value;args.bad-value;args.unexpected-value;args.duplicate-flag;args.missing-operand;args.too-many-operands;fetch.method;fetch.url-not-a-path;fetch.path-malformed;fetch.host-not-allowed;fetch.host-required;fetch.header-malformed;fetch.connect-failed;fetch.peer-not-public;fetch.timeout;fetch.body-too-large;fetch.response-malformed;fetch.response-truncated", extra_rules: extra(), limits: "max-bytes|1048576|16777216;timeout-ms|10000|60000", reversibility: "irreversible-consequential", stdin: "no", guarantees: "bounded_memory" };
+    return describe.Tool { name: "fetch", version: "0.1.0", summary: "Send one HTTP GET, HEAD or POST request to a host this build was given, and answer the status, the headers and the body. The hosts are in the binary and in its authority row; a request for any other host is refused before a socket opens. No redirects, credentials or cookies.", usage: "fetch [--host H] [--max-bytes N] [--timeout-ms N] [--accept TEXT] [--body TEXT --content-type TYPE] [--format json|text] METHOD PATH", output: "document", schema: "fetch.v1", flags: flag_table(), operands: "METHOD|name|1|1|get, head or post;PATH|text|1|1|the request target: a path beginning with a single /, optionally with a query", rules: "args.unknown-flag;args.missing-value;args.bad-value;args.unexpected-value;args.duplicate-flag;args.missing-operand;args.too-many-operands;fetch.method;fetch.body-required;fetch.body-not-allowed;fetch.request-body-too-large;fetch.url-not-a-path;fetch.path-malformed;fetch.host-not-allowed;fetch.host-required;fetch.header-malformed;fetch.connect-failed;fetch.peer-not-public;fetch.timeout;fetch.body-too-large;fetch.response-malformed;fetch.response-truncated", extra_rules: extra(), limits: "max-bytes|1048576|16777216;timeout-ms|10000|60000", reversibility: "irreversible-consequential", stdin: "no", guarantees: "bounded_memory" };
 }
 
 pub fn built() -> [] describe.Built {
@@ -43,6 +43,10 @@ pub fn built() -> [] describe.Built {
 
 fn max_bytes_ceiling() -> [] int {
     return 16777216;
+}
+
+fn request_body_ceiling() -> [] int {
+    return 65536;
 }
 
 fn timeout_ceiling() -> [] int {
@@ -142,12 +146,15 @@ pub struct Plan {
     // The entry of the baked list the request goes to.
     host: int,
     head: bool,
+    post: bool,
     max_bytes: int,
     timeout: int,
     text_mode: bool,
     // The request target, and the header lines to add (`Accept: ...\r\n`, or empty): copied out of the arguments.
     path: buffer.Buffer,
     extra_headers: buffer.Buffer,
+    // The request body of a post, else empty.
+    body: buffer.Buffer,
     errors: fail.Errors,
 }
 
@@ -203,6 +210,8 @@ pub fn plan[&h, &g, &l](heap: &!h Heap, args: &g Args, hosts: &l [byte]) -> [hea
     let table = flag_table();
     var e = errs;
     var head = false;
+    var post = false;
+    var body = buffer.empty(heap, 1);
     var host = 0 - 1;
     var path = buffer.empty(heap, 64);
     var extra_headers = buffer.empty(heap, 64);
@@ -226,8 +235,10 @@ pub fn plan[&h, &g, &l](heap: &!h Heap, args: &g Args, hosts: &l [byte]) -> [hea
                 head = false;
             } else if bytes.equal(method, "head") {
                 head = true;
+            } else if bytes.equal(method, "post") {
+                post = true;
             } else {
-                var w = fail.open_in(heap, extra(), "fetch.method", "this tool sends get and head", "METHOD is get or head; other methods are not offered");
+                var w = fail.open_in(heap, extra(), "fetch.method", "this tool sends get, head and post", "METHOD is get, head or post; other methods are not offered");
                 w = fail.no_repair(heap, w);
                 w = fail.detail_open(heap, w);
                 w = json.put_key(heap, w, "method");
@@ -288,6 +299,37 @@ pub fn plan[&h, &g, &l](heap: &!h Heap, args: &g Args, hosts: &l [byte]) -> [hea
             e = fail.add(heap, e, w);
         }
         extra_headers = buffer.append(heap, extra_headers, "User-Agent: cancho-fetch\r\nAccept-Encoding: identity\r\n");
+        let has_body = cli.has(p, table, "body");
+        let has_type = cli.has(p, table, "content-type");
+        if post && !(has_body && has_type) {
+            e = flag_problem(heap, e, "fetch.body-required", "post sends a body: it needs --body and --content-type", "add --body TEXT --content-type TYPE (for example application/json)", "--body");
+        } else if !post && (has_body || has_type) && cli.operand_count(p) >= 2 {
+            e = flag_problem(heap, e, "fetch.body-not-allowed", "--body and --content-type belong to post; get and head send no body", "drop them, or use post", "--body");
+        }
+        if post && has_body && has_type {
+            let text_body = cli.text(args, p, table, "body");
+            let kind = cli.text(args, p, table, "content-type");
+            if len(text_body) > request_body_ceiling() {
+                e = flag_problem(heap, e, "fetch.request-body-too-large", "--body is larger than the 65536 bytes this tool sends", "send less, or split the request", "--body");
+            } else {
+                body = buffer.append(heap, body, text_body);
+            }
+            var line = buffer.empty(heap, 32 + len(kind));
+            line = buffer.append(heap, line, "Content-Type: ");
+            line = buffer.append(heap, line, kind);
+            line = buffer.append(heap, line, "\r\n");
+            var good = false;
+            borrow line as &ln in {
+                good = len(kind) > 0 && plain_value(kind) && http_client_wire.valid_extra(buffer.bytes(ln));
+                if good {
+                    extra_headers = buffer.append(heap, extra_headers, buffer.bytes(ln));
+                }
+            }
+            buffer.drop(heap, line);
+            if !good {
+                e = flag_problem(heap, e, "fetch.header-malformed", "--content-type holds a byte a header value may not hold, or is empty", "give a media type such as application/json", "--content-type");
+            }
+        }
         if cli.has(p, table, "accept") {
             let value = cli.text(args, p, table, "accept");
             var line = buffer.empty(heap, 32 + len(value));
@@ -308,7 +350,7 @@ pub fn plan[&h, &g, &l](heap: &!h Heap, args: &g Args, hosts: &l [byte]) -> [hea
         }
     }
     cli.drop(heap, parsed);
-    return Plan { host: host, head: head, max_bytes: most, timeout: timeout, text_mode: text_mode, path: path, extra_headers: extra_headers, errors: e };
+    return Plan { host: host, head: head, post: post, max_bytes: most, timeout: timeout, text_mode: text_mode, path: path, extra_headers: extra_headers, body: body, errors: e };
 }
 
 // Does the plan carry a refusal already?
@@ -321,7 +363,8 @@ pub fn host_of[&p](plan: &p Plan) -> [] int {
 }
 
 pub fn drop_plan[&h](heap: &!h Heap, plan: Plan) -> [heap] int {
-    let Plan { host, head, max_bytes, timeout, text_mode, path, extra_headers, errors } = plan;
+    let Plan { host, head, post, max_bytes, timeout, text_mode, path, extra_headers, body, errors } = plan;
+    buffer.drop(heap, body);
     buffer.drop(heap, path);
     buffer.drop(heap, extra_headers);
     fail.drop(heap, errors);
@@ -561,6 +604,8 @@ fn data[&h, &p, &a, &r, &x, &b, &q](heap: &!h Heap, plan: &p Plan, authority: &a
     w = json.put_key(heap, w, "method");
     if plan.head {
         w = json.put_string(heap, w, "head");
+    } else if plan.post {
+        w = json.put_string(heap, w, "post");
     } else {
         w = json.put_string(heap, w, "get");
     }
@@ -666,16 +711,26 @@ pub fn exchange[&h, &k, &p, &a](heap: &!h Heap, clock: &k Clock, conn: Conn, pla
                 var method = "GET";
                 if plan.head {
                     method = "HEAD";
+                } else if plan.post {
+                    method = "POST";
+                }
+                let sending = buffer.bytes(plan.body);
+                var framing = http_client_wire.body_none();
+                if plan.post {
+                    framing = len(sending);
                 }
                 var sent = 0 - 3;
                 let target = buffer.bytes(plan.path);
                 let more = buffer.bytes(plan.extra_headers);
-                let size = http_client_wire.write_head(req, method, target, authority, more, http_client_wire.body_none(), false, true);
+                let size = http_client_wire.write_head(req, method, target, authority, more, framing, false, true);
                 var sent = 0 - 3;
                 if size >= 0 {
                     borrow mut c as &!cm in {
                         borrow mut poller as &!pm in {
                             sent = send_all(clock, pm, cm, events, req[0..size], deadline);
+                            if sent == 0 && len(sending) > 0 {
+                                sent = send_all(clock, pm, cm, events, sending, deadline);
+                            }
                         }
                     }
                 }
