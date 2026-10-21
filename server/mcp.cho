@@ -1,0 +1,1133 @@
+edition 7;
+
+import std.buffer;
+import std.bytes;
+import std.io;
+import std.json;
+import std.process;
+import mcp.tools;
+
+// The MCP server for `fetch` (docs/mcp.md): one stdio connection,
+// newline-delimited JSON-RPC 2.0, and the one tool `table` as an MCP tool.
+//
+//     mcp [--timeout-ms N] [--max-output N] [--max-input N]
+//     mcp introspect
+//
+// Copied from cancho-tools' server/mcp.cho (rev 74411ee43c74a2741ed1bb37404844fcbb031753) and
+// adapted: the binary directory below, standard error captured beside standard
+// output, a refusal of the server's own always carries a rule, the answer is
+// bounded and its refusals say what to ask for instead, and `introspect`.
+//
+// What it may do is what its row says: start the binary in the one directory
+// its `Exec` is narrowed to, read its input, write its output and error, and
+// keep a clock for the deadline. It holds no `Fs` and no `Net`, and reads no
+// file itself; `fetch` reaches the network, for the hosts baked into it. A call's
+// `stdin` text is written to the pipe that is the child's standard input and to
+// no other place: the server's own standard input is the JSON-RPC channel.
+//
+// A call is checked against the tables `scripts/mcp.py` generates from the
+// tool's `introspect` (generated/mcp/tools.cho), and becomes a fixed argv: the
+// binary by name, each flag as one `--name=value`
+// argument, then `--` and the operands. The directory below is the default;
+// `scripts/mcp.py build --bin DIR` writes another into a copy and builds that,
+// because `narrow` takes a literal.
+
+// ---- the server's own command line -----------------------------------------
+
+// A decimal of at most twelve digits, or -1.
+fn nat_of[&t](text: &t [byte]) -> [] int {
+    if len(text) == 0 || len(text) > 12 {
+        return 0 - 1;
+    }
+    var n = 0;
+    var i = 0;
+    while i < len(text) {
+        let d = bytes.digit_of(int_of(text[i]));
+        if d < 0 {
+            return 0 - 1;
+        }
+        n = n * 10 + d;
+        i = i + 1;
+    }
+    return n;
+}
+
+pub struct Config {
+    timeout: int,
+    most: int,
+    input: int,
+}
+
+// The configuration, or a reason it is not one. There is no `--root`: `fetch` reads no file, and the hosts it may reach
+// are baked into the tool, not chosen by the server.
+fn configure[&g](g: &g Args) -> [args] (Config, &static [byte]) {
+    var timeout = tools.default_timeout();
+    var most = tools.default_output();
+    var input = tools.default_input();
+    let refused = Config { timeout: 0, most: 0, input: 0 };
+    var k = 1;
+    while k < arg_count(g) {
+        let flag = arg(g, k);
+        if k + 1 >= arg_count(g) {
+            return (refused, "every flag takes a value");
+        }
+        let value = arg(g, k + 1);
+        if bytes.equal(flag, "--timeout-ms") {
+            timeout = nat_of(value);
+            if timeout <= 0 {
+                return (refused, "--timeout-ms must be a positive number of milliseconds");
+            }
+        } else if bytes.equal(flag, "--max-output") {
+            most = nat_of(value);
+            if most <= 0 {
+                return (refused, "--max-output must be a positive number of bytes");
+            }
+        } else if bytes.equal(flag, "--max-input") {
+            input = nat_of(value);
+            if input <= 0 {
+                return (refused, "--max-input must be a positive number of bytes");
+            }
+        } else {
+            return (refused, "the flags are --timeout-ms, --max-output and --max-input");
+        }
+        k = k + 2;
+    }
+    return (Config { timeout: timeout, most: most, input: input }, "");
+}
+
+// ---- reading and answering --------------------------------------------------
+
+// The longest request line read; a longer one is read to its end, dropped and
+// answered as an invalid request.
+fn longest_line() -> [] int {
+    return tools.longest_line();
+}
+
+// One line of standard input without its `\n`: `0` for a line, `1` at the end
+// of input with nothing read, `2` for a line past `longest_line`.
+fn read_line[&h, &i](heap: &!h Heap, io: &!i Io) -> [heap, io_read] (buffer.Buffer, int) {
+    var line = buffer.empty(heap, 256);
+    var n = 0;
+    var over = false;
+    while true {
+        let c = getchar(io);
+        if c < 0 {
+            if n == 0 && !over {
+                return (line, 1);
+            }
+            if over {
+                return (line, 2);
+            }
+            return (line, 0);
+        }
+        if c == 10 {
+            if over {
+                return (line, 2);
+            }
+            return (line, 0);
+        }
+        if !over {
+            if n >= longest_line() {
+                over = true;
+            } else {
+                line = buffer.push(heap, line, byte_of(c));
+                n = n + 1;
+            }
+        }
+    }
+    return (line, 0);
+}
+
+// A string node, decoded, in a box the caller ends.
+fn decoded[&h, &s, &t](heap: &!h Heap, src: &s [byte], tape: &t [int], i: int) -> [heap] Box[[byte]] {
+    var out = box_slice(heap, json.string_length(src, tape, i), byte_of(0));
+    borrow mut out as &!o in {
+        json.string_into(src, tape, i, contents(o));
+    }
+    return out;
+}
+
+// The request's `id` as it came: a number or a string, and `null` for none.
+fn put_id[&h, &s, &t](heap: &!h Heap, w: json.Writer, src: &s [byte], tape: &t [int], id: int) -> [heap] json.Writer {
+    if json.is_int(tape, id) && json.fits_int(src, tape, id) {
+        return json.put_int(heap, w, json.to_int(src, tape, id));
+    }
+    if json.is_string(tape, id) {
+        let text = decoded(heap, src, tape, id);
+        var out = w;
+        borrow text as &tr in {
+            out = json.put_string(heap, out, contents(tr));
+        }
+        unbox_slice(heap, text);
+        return out;
+    }
+    return json.put_null(heap, w);
+}
+
+// An answer's opening: the version and the request's id.
+fn opened[&h, &s, &t](heap: &!h Heap, src: &s [byte], tape: &t [int], id: int) -> [heap] json.Writer {
+    var w = json.writer(heap, 256);
+    w = json.begin_object(heap, w);
+    w = json.put_key(heap, w, "jsonrpc");
+    w = json.put_string(heap, w, "2.0");
+    w = json.put_key(heap, w, "id");
+    return put_id(heap, w, src, tape, id);
+}
+
+// Write an answer as one line and flush it: a client reading a pipe sees
+// nothing that is still in the buffer.
+fn send[&h, &i](heap: &!h Heap, io: &!i Io, w: json.Writer) -> [heap, io_write] int {
+    let out = json.finish(w);
+    borrow out as &o in {
+        write_bytes(io, buffer.bytes(o));
+    }
+    putchar(io, 10);
+    var status = 0;
+    match flush_out(io) {
+        Done::Ok(n) => {
+        }
+        Done::Failed(e) => {
+            status = e;
+        }
+    }
+    buffer.drop(heap, out);
+    return status;
+}
+
+// A refusal of the server's own: a JSON-RPC error whose `data` names the rule, as the
+// tool's errors do, so a caller branches on the rule and not on the message.
+fn refuse[&h, &i, &s, &t, &m](heap: &!h Heap, io: &!i Io, src: &s [byte], tape: &t [int], id: int, code: int, rule: &static [byte], message: &m [byte]) -> [heap, io_write] int {
+    var w = opened(heap, src, tape, id);
+    w = json.put_key(heap, w, "error");
+    w = json.begin_object(heap, w);
+    w = json.put_key(heap, w, "code");
+    w = json.put_int(heap, w, code);
+    w = json.put_key(heap, w, "message");
+    w = json.put_string(heap, w, message);
+    w = json.put_key(heap, w, "data");
+    w = json.begin_object(heap, w);
+    w = json.put_key(heap, w, "rule");
+    w = json.put_string(heap, w, rule);
+    w = json.end_object(heap, w);
+    w = json.end_object(heap, w);
+    w = json.end_object(heap, w);
+    return send(heap, io, w);
+}
+
+// `refuse`, with a `data` object saying which rule, which property, and what was
+// expected: the way the tools' own errors do (`rule`, and what to change).
+fn refuse_about[&h, &i, &s, &t, &m, &d](heap: &!h Heap, io: &!i Io, src: &s [byte], tape: &t [int], id: int, code: int, message: &m [byte], data: &d [byte]) -> [heap, io_write] int {
+    var w = opened(heap, src, tape, id);
+    w = json.put_key(heap, w, "error");
+    w = json.begin_object(heap, w);
+    w = json.put_key(heap, w, "code");
+    w = json.put_int(heap, w, code);
+    w = json.put_key(heap, w, "message");
+    w = json.put_string(heap, w, message);
+    w = json.put_key(heap, w, "data");
+    w = json.put_fragment(heap, w, data);
+    w = json.end_object(heap, w);
+    w = json.end_object(heap, w);
+    return send(heap, io, w);
+}
+
+fn refuse_problem[&h, &i, &s, &t](heap: &!h Heap, io: &!i Io, src: &s [byte], tape: &t [int], id: int, tool: int, p: Problem) -> [heap, io_write] int {
+    let message = explain(heap, src, tape, tool, p);
+    let data = about(heap, src, tape, p);
+    var status = 0;
+    borrow message as &m in {
+        borrow data as &d in {
+            status = refuse_about(heap, io, src, tape, id, 0 - 32602, buffer.bytes(m), buffer.bytes(d));
+        }
+    }
+    buffer.drop(heap, message);
+    buffer.drop(heap, data);
+    return status;
+}
+
+// An error with no request to take an id from: `id` is `null`.
+fn refuse_bare[&h, &i](heap: &!h Heap, io: &!i Io, code: int, rule: &static [byte], message: &static [byte]) -> [heap, io_write] int {
+    let none = box_slice(heap, 3, 0);
+    var status = 0;
+    borrow none as &n in {
+        status = refuse(heap, io, "", contents(n), 0 - 1, code, rule, message);
+    }
+    unbox_slice(heap, none);
+    return status;
+}
+
+// ---- one call ----------------------------------------------------------------
+
+// Why a call's arguments were refused, as JSON-RPC's invalid params: what, which
+// property, what the schema wants, and the node of the value (or key) at fault, so the
+// answer can say what was received. `code`: 0 none, 1 not an object, 2 an unknown
+// property, 3 the wrong type, 4 a NUL byte, 5 both the operand and `stdin`, 6 neither
+// (`name` is the operand's).
+struct Problem {
+    code: int,
+    name: &static [byte],
+    expected: &static [byte],
+    at: int,
+}
+
+fn fine() -> [] Problem {
+    return Problem { code: 0, name: "", expected: "", at: 0 - 1 };
+}
+
+fn wrong(name: &static [byte], expected: &static [byte], at: int) -> [] Problem {
+    return Problem { code: 3, name: name, expected: expected, at: at };
+}
+
+fn rule_of(code: int) -> [] &static [byte] {
+    if code == 1 {
+        return "mcp.arguments-not-object";
+    }
+    if code == 2 {
+        return "mcp.unknown-argument";
+    }
+    if code == 3 {
+        return "mcp.wrong-type";
+    }
+    if code == 5 {
+        return "mcp.input-conflict";
+    }
+    if code == 6 {
+        return "mcp.input-missing";
+    }
+    return "mcp.nul-in-argument";
+}
+
+// The tool's property names, `a, b, c`, from the generated tables.
+fn property_names[&h](heap: &!h Heap, out: buffer.Buffer, tool: int) -> [heap] buffer.Buffer {
+    var b = out;
+    var first = true;
+    let flags = tools.flags(tool);
+    var k = 0;
+    while len(flags) > 0 && k < bytes.count_byte(flags, ';') + 1 {
+        if !first {
+            b = buffer.append(heap, b, ", ");
+        }
+        b = buffer.append(heap, b, bytes.field(bytes.field(flags, ';', k + 1), '|', 1));
+        first = false;
+        k = k + 1;
+    }
+    let operands = tools.operands(tool);
+    k = 0;
+    while len(operands) > 0 && k < bytes.count_byte(operands, ';') + 1 {
+        if !first {
+            b = buffer.append(heap, b, ", ");
+        }
+        b = buffer.append(heap, b, bytes.field(bytes.field(operands, ';', k + 1), '|', 1));
+        first = false;
+        k = k + 1;
+    }
+    if len(tools.stdin(tool)) > 0 {
+        if !first {
+            b = buffer.append(heap, b, ", ");
+        }
+        b = buffer.append(heap, b, "stdin");
+    }
+    return b;
+}
+
+// The message for a refused call: the property, what the schema wants and what arrived,
+// and for the mistake small models make most (a number or a boolean sent as a string)
+// what to send instead. Written for a caller that will read it once and try again.
+fn explain[&h, &s, &t](heap: &!h Heap, src: &s [byte], tape: &t [int], tool: int, p: Problem) -> [heap] buffer.Buffer {
+    var b = buffer.empty(heap, 192);
+    if p.code == 1 {
+        return buffer.append(heap, b, "`arguments` must be an object of the tool's properties");
+    }
+    if p.code == 2 {
+        let key = decoded(heap, src, tape, p.at);
+        b = buffer.append(heap, b, "`");
+        borrow key as &kr in {
+            b = buffer.append(heap, b, contents(kr));
+        }
+        unbox_slice(heap, key);
+        b = buffer.append(heap, b, "` is not a property of ");
+        b = buffer.append(heap, b, tools.name(tool));
+        b = buffer.append(heap, b, "; its properties are: ");
+        return property_names(heap, b, tool);
+    }
+    b = buffer.append(heap, b, "`");
+    b = buffer.append(heap, b, p.name);
+    if p.code == 5 {
+        return buffer.append(heap, b, "` and `stdin` are both given: a call has one input, so give exactly one of them");
+    }
+    if p.code == 6 {
+        return buffer.append(heap, b, "` or `stdin` is required: give exactly one of them (`stdin` is the table as text)");
+    }
+    if p.code == 4 {
+        return buffer.append(heap, b, "` contains a NUL byte, which would arrive as two arguments");
+    }
+    b = buffer.append(heap, b, "` must be ");
+    b = buffer.append(heap, b, p.expected);
+    let got = json.kind_name(tape, p.at);
+    b = buffer.append(heap, b, ", not ");
+    b = buffer.append(heap, b, a_or_an(got));
+    return hint(heap, b, p.expected, got);
+}
+
+// What to send instead, for the mistakes a caller makes most.
+fn hint[&h](heap: &!h Heap, b: buffer.Buffer, expected: &static [byte], got: &static [byte]) -> [heap] buffer.Buffer {
+    var out = b;
+    if bytes.equal(got, "string") && bytes.equal(expected, "a non-negative integer") {
+        out = buffer.append(heap, out, "; send a JSON number such as 1, not a string such as \"1\"");
+    }
+    if bytes.equal(got, "string") && bytes.equal(expected, "a boolean") {
+        out = buffer.append(heap, out, "; send true or false, not a string");
+    }
+    if bytes.equal(got, "number") && bytes.equal(expected, "a non-negative integer") {
+        out = buffer.append(heap, out, " (a negative or fractional number is refused)");
+    }
+    return out;
+}
+
+// How a property's value must look: `bool`, `nat`, `text`, or for an operand `one` (a
+// string) or `many` (an array of strings); empty for a key the tool does not take.
+fn kind_of[&s, &t](src: &s [byte], tape: &t [int], tool: int, key: int) -> [] &static [byte] {
+    let flags = tools.flags(tool);
+    var k = 0;
+    while len(flags) > 0 && k < bytes.count_byte(flags, ';') + 1 {
+        let row = bytes.field(flags, ';', k + 1);
+        if json.string_equals(src, tape, key, bytes.field(row, '|', 1)) {
+            return bytes.field(row, '|', 3);
+        }
+        k = k + 1;
+    }
+    let operands = tools.operands(tool);
+    k = 0;
+    while len(operands) > 0 && k < bytes.count_byte(operands, ';') + 1 {
+        let row = bytes.field(operands, ';', k + 1);
+        if json.string_equals(src, tape, key, bytes.field(row, '|', 1)) {
+            if bytes.equal(bytes.field(row, '|', 3), "1") {
+                return "one";
+            }
+            return "many";
+        }
+        k = k + 1;
+    }
+    if len(tools.stdin(tool)) > 0 && json.string_equals(src, tape, key, "stdin") {
+        return "text";
+    }
+    return "";
+}
+
+fn expected_of(kind: &static [byte]) -> [] &static [byte] {
+    if bytes.equal(kind, "bool") {
+        return "a boolean";
+    }
+    if bytes.equal(kind, "nat") {
+        return "a non-negative integer";
+    }
+    if bytes.equal(kind, "many") {
+        return "an array of strings";
+    }
+    return "a string";
+}
+
+// The node at fault for value `v` of `kind`, or -1 when it is as the schema says.
+fn fault_at[&s, &t](src: &s [byte], tape: &t [int], v: int, kind: &static [byte]) -> [] int {
+    if bytes.equal(kind, "bool") {
+        if json.is_bool(tape, v) {
+            return 0 - 1;
+        }
+        return v;
+    }
+    if bytes.equal(kind, "nat") {
+        if json.is_int(tape, v) && json.fits_int(src, tape, v) && json.to_int(src, tape, v) >= 0 {
+            return 0 - 1;
+        }
+        return v;
+    }
+    if bytes.equal(kind, "many") {
+        if !json.is_array(tape, v) {
+            return v;
+        }
+        var n = 0;
+        while n < json.count(tape, v) {
+            let item = json.at(tape, v, n);
+            if !json.is_string(tape, item) {
+                return item;
+            }
+            n = n + 1;
+        }
+        return 0 - 1;
+    }
+    if json.is_string(tape, v) {
+        return 0 - 1;
+    }
+    return v;
+}
+
+// Every property of the wrong type, in one answer: a caller that sent three values
+// as strings is told all three, not the first and then the second. The message, the
+// `data` object, and how many.
+fn faults[&h, &s, &t](heap: &!h Heap, src: &s [byte], tape: &t [int], tool: int, given: int) -> [heap] (buffer.Buffer, buffer.Buffer, int) {
+    var message = buffer.empty(heap, 192);
+    var w = json.writer(heap, 192);
+    w = json.begin_object(heap, w);
+    w = json.put_key(heap, w, "rule");
+    w = json.put_string(heap, w, "mcp.wrong-type");
+    w = json.put_key(heap, w, "problems");
+    w = json.begin_array(heap, w);
+    var found = 0;
+    if given >= 0 && json.is_object(tape, given) {
+        var j = given + 1;
+        var left = json.count(tape, given);
+        while left > 0 {
+            let kind = kind_of(src, tape, tool, j);
+            if len(kind) > 0 {
+                let at = fault_at(src, tape, j + 1, kind);
+                if at >= 0 {
+                    let label = decoded(heap, src, tape, j);
+                    let expected = expected_of(kind);
+                    let got = json.kind_name(tape, at);
+                    if found > 0 {
+                        message = buffer.append(heap, message, "; ");
+                    }
+                    message = buffer.append(heap, message, "`");
+                    w = json.begin_object(heap, w);
+                    w = json.put_key(heap, w, "property");
+                    borrow label as &lr in {
+                        message = buffer.append(heap, message, contents(lr));
+                        w = json.put_string(heap, w, contents(lr));
+                    }
+                    unbox_slice(heap, label);
+                    message = buffer.append(heap, message, "` must be ");
+                    message = buffer.append(heap, message, expected);
+                    if at != j + 1 {
+                        message = buffer.append(heap, message, ", but an item is ");
+                    } else {
+                        message = buffer.append(heap, message, ", not ");
+                    }
+                    message = buffer.append(heap, message, a_or_an(got));
+                    message = hint(heap, message, expected, got);
+                    w = json.put_key(heap, w, "expected");
+                    w = json.put_string(heap, w, expected);
+                    w = json.put_key(heap, w, "got");
+                    w = json.put_string(heap, w, got);
+                    w = json.end_object(heap, w);
+                    found = found + 1;
+                }
+            }
+            j = json.skip(tape, j + 1);
+            left = left - 1;
+        }
+    }
+    w = json.end_array(heap, w);
+    w = json.end_object(heap, w);
+    return (message, json.finish(w), found);
+}
+
+fn a_or_an(kind: &static [byte]) -> [] &static [byte] {
+    if bytes.equal(kind, "array") {
+        return "an array";
+    }
+    if bytes.equal(kind, "object") {
+        return "an object";
+    }
+    if bytes.equal(kind, "null") {
+        return "null";
+    }
+    if bytes.equal(kind, "boolean") {
+        return "a boolean";
+    }
+    if bytes.equal(kind, "number") {
+        return "a number";
+    }
+    return "a string";
+}
+
+// What an agent can branch on, as the tools' own errors give: the rule, the property,
+// what was expected and what arrived.
+fn about[&h, &s, &t](heap: &!h Heap, src: &s [byte], tape: &t [int], p: Problem) -> [heap] buffer.Buffer {
+    var w = json.writer(heap, 128);
+    w = json.begin_object(heap, w);
+    w = json.put_key(heap, w, "rule");
+    w = json.put_string(heap, w, rule_of(p.code));
+    if p.code == 2 {
+        let key = decoded(heap, src, tape, p.at);
+        w = json.put_key(heap, w, "property");
+        borrow key as &kr in {
+            w = json.put_string(heap, w, contents(kr));
+        }
+        unbox_slice(heap, key);
+    } else if p.code == 5 || p.code == 6 {
+        w = json.put_key(heap, w, "properties");
+        w = json.begin_array(heap, w);
+        w = json.put_string(heap, w, p.name);
+        w = json.put_string(heap, w, "stdin");
+        w = json.end_array(heap, w);
+    } else if p.code >= 3 {
+        w = json.put_key(heap, w, "property");
+        w = json.put_string(heap, w, p.name);
+    }
+    if p.code == 3 {
+        w = json.put_key(heap, w, "expected");
+        w = json.put_string(heap, w, p.expected);
+        w = json.put_key(heap, w, "got");
+        w = json.put_string(heap, w, json.kind_name(tape, p.at));
+    }
+    w = json.end_object(heap, w);
+    return json.finish(w);
+}
+
+// Is `key` (a string node) one of the tool's properties?
+fn known[&s, &t](src: &s [byte], tape: &t [int], tool: int, key: int) -> [] bool {
+    let flags = tools.flags(tool);
+    var k = 0;
+    while k < bytes.count_byte(flags, ';') + 1 && len(flags) > 0 {
+        if json.string_equals(src, tape, key, bytes.field(bytes.field(flags, ';', k + 1), '|', 1)) {
+            return true;
+        }
+        k = k + 1;
+    }
+    let operands = tools.operands(tool);
+    k = 0;
+    while k < bytes.count_byte(operands, ';') + 1 && len(operands) > 0 {
+        if json.string_equals(src, tape, key, bytes.field(bytes.field(operands, ';', k + 1), '|', 1)) {
+            return true;
+        }
+        k = k + 1;
+    }
+    return len(tools.stdin(tool)) > 0 && json.string_equals(src, tape, key, "stdin");
+}
+
+// Add `prefix` and the string at node `i` as one entry: `0`, or `4` for a
+// NUL in it.
+fn add_text[&h, &s, &t](heap: &!h Heap, entries: process.Argv, prefix: &static [byte], src: &s [byte], tape: &t [int], i: int) -> [heap] (process.Argv, int) {
+    let text = decoded(heap, src, tape, i);
+    var entry = buffer.empty(heap, len(prefix) + 16);
+    entry = buffer.append(heap, entry, prefix);
+    borrow text as &tr in {
+        entry = buffer.append(heap, entry, contents(tr));
+    }
+    unbox_slice(heap, text);
+    var result = 0;
+    var out = entries;
+    borrow entry as &er in {
+        let (added, refused) = process.add(heap, out, buffer.bytes(er));
+        out = added;
+        if refused != 0 {
+            result = 4;
+        }
+    }
+    buffer.drop(heap, entry);
+    return (out, result);
+}
+
+// The argv for tool `tool` with the call's `arguments` node, in the tables'
+// order whatever order the keys came in, and the `Problem` (code 0 for none).
+fn argv_for[&h, &s, &t](heap: &!h Heap, src: &s [byte], tape: &t [int], tool: int, given: int) -> [heap] (process.Argv, Problem) {
+    var entries = process.argv(heap, 256);
+    if given >= 0 && !json.is_object(tape, given) {
+        return (entries, Problem { code: 1, name: "arguments", expected: "an object", at: given });
+    }
+    // Every key is one the tool takes.
+    if given >= 0 {
+        var j = given + 1;
+        var left = json.count(tape, given);
+        while left > 0 {
+            if !known(src, tape, tool, j) {
+                return (entries, Problem { code: 2, name: "", expected: "", at: j });
+            }
+            j = json.skip(tape, j + 1);
+            left = left - 1;
+        }
+    }
+    // One input: the operand or `stdin`, exactly one of the two (docs/mcp.md section 12).
+    if bytes.equal(tools.stdin(tool), "text") {
+        let operands = tools.operands(tool);
+        var with_operand = false;
+        var o = 0;
+        while len(operands) > 0 && o < bytes.count_byte(operands, ';') + 1 {
+            if json.get(src, tape, given, bytes.field(bytes.field(operands, ';', o + 1), '|', 1)) >= 0 {
+                with_operand = true;
+            }
+            o = o + 1;
+        }
+        let with_stdin = json.get(src, tape, given, "stdin") >= 0;
+        let which = bytes.field(bytes.field(operands, ';', 1), '|', 1);
+        if with_operand && with_stdin {
+            return (entries, Problem { code: 5, name: which, expected: "", at: given });
+        }
+        if !with_operand && !with_stdin {
+            return (entries, Problem { code: 6, name: which, expected: "", at: given });
+        }
+    }
+    let flags = tools.flags(tool);
+    var k = 0;
+    while len(flags) > 0 && k < bytes.count_byte(flags, ';') + 1 {
+        let row = bytes.field(flags, ';', k + 1);
+        let v = json.get(src, tape, given, bytes.field(row, '|', 1));
+        let flag = bytes.field(row, '|', 2);
+        let kind = bytes.field(row, '|', 3);
+        if v >= 0 {
+            if bytes.equal(kind, "bool") {
+                if !json.is_bool(tape, v) {
+                    return (entries, wrong(bytes.field(row, '|', 1), "a boolean", v));
+                }
+                if json.to_bool(tape, v) {
+                    let (added, refused) = process.add(heap, entries, flag);
+                    entries = added;
+                }
+            } else if bytes.equal(kind, "nat") {
+                if !json.is_int(tape, v) || !json.fits_int(src, tape, v) || json.to_int(src, tape, v) < 0 {
+                    return (entries, wrong(bytes.field(row, '|', 1), "a non-negative integer", v));
+                }
+                var entry = buffer.empty(heap, len(flag) + 24);
+                entry = buffer.append(heap, entry, flag);
+                entry = buffer.push(heap, entry, byte_of('='));
+                entry = buffer.push_nat(heap, entry, json.to_int(src, tape, v));
+                borrow entry as &er in {
+                    let (added, refused) = process.add(heap, entries, buffer.bytes(er));
+                    entries = added;
+                }
+                buffer.drop(heap, entry);
+            } else {
+                if !json.is_string(tape, v) {
+                    return (entries, wrong(bytes.field(row, '|', 1), "a string", v));
+                }
+                var prefix = buffer.empty(heap, len(flag) + 1);
+                prefix = buffer.append(heap, prefix, flag);
+                prefix = buffer.push(heap, prefix, byte_of('='));
+                let text = decoded(heap, src, tape, v);
+                borrow text as &tr in {
+                    prefix = buffer.append(heap, prefix, contents(tr));
+                }
+                unbox_slice(heap, text);
+                var refused = 0;
+                borrow prefix as &pr in {
+                    let (added, r) = process.add(heap, entries, buffer.bytes(pr));
+                    entries = added;
+                    refused = r;
+                }
+                buffer.drop(heap, prefix);
+                if refused != 0 {
+                    return (entries, Problem { code: 4, name: bytes.field(row, '|', 1), expected: "", at: v });
+                }
+            }
+        }
+        k = k + 1;
+    }
+    if bytes.equal(tools.stdin(tool), "flag") && json.get(src, tape, given, "stdin") >= 0 {
+        let (added, refused) = process.add(heap, entries, "--stdin");
+        entries = added;
+    }
+
+    // Operands after `--`: none of them can be taken for a flag.
+    let (fenced, refused) = process.add(heap, entries, "--");
+    entries = fenced;
+    // The call's `stdin` text is the tool's standard input, named by the operand `-`: a `--query` that names a source, or a file, is then the tool's own
+    // conflict, and the text is never set aside for a file.
+    if bytes.equal(tools.stdin(tool), "text") && json.get(src, tape, given, "stdin") >= 0 {
+        let (added, refused) = process.add(heap, entries, "-");
+        entries = added;
+    }
+    let operands = tools.operands(tool);
+    k = 0;
+    while len(operands) > 0 && k < bytes.count_byte(operands, ';') + 1 {
+        let row = bytes.field(operands, ';', k + 1);
+        let v = json.get(src, tape, given, bytes.field(row, '|', 1));
+        if v >= 0 {
+            if bytes.equal(bytes.field(row, '|', 3), "1") {
+                if !json.is_string(tape, v) {
+                    return (entries, wrong(bytes.field(row, '|', 1), "a string", v));
+                }
+                let (added, r) = add_text(heap, entries, "", src, tape, v);
+                entries = added;
+                if r != 0 {
+                    return (entries, Problem { code: 4, name: bytes.field(row, '|', 1), expected: "", at: v });
+                }
+            } else {
+                if !json.is_array(tape, v) {
+                    return (entries, wrong(bytes.field(row, '|', 1), "an array of strings", v));
+                }
+                var n = 0;
+                while n < json.count(tape, v) {
+                    let item = json.at(tape, v, n);
+                    if !json.is_string(tape, item) {
+                        return (entries, wrong(bytes.field(row, '|', 1), "an array of strings", item));
+                    }
+                    let (added, r) = add_text(heap, entries, "", src, tape, item);
+                    entries = added;
+                    if r != 0 {
+                        return (entries, Problem { code: 4, name: bytes.field(row, '|', 1), expected: "", at: item });
+                    }
+                    n = n + 1;
+                }
+            }
+        }
+        k = k + 1;
+    }
+    return (entries, fine());
+}
+
+// Is `out` one JSON object, so it can be `structuredContent` as well as text?
+// `put_fragment` traps on anything else, and a tool's output is not the
+// server's to trust that far.
+fn one_object[&h, &o](heap: &!h Heap, out: &o [byte]) -> [heap] bool {
+    let tape = box_slice(heap, json.tape_len(out) + 3, 0);
+    var whole = false;
+    borrow mut tape as &!tw in {
+        let nodes = json.parse(out, contents(tw));
+        whole = nodes > 0 && json.is_object(contents(tw), 0);
+    }
+    unbox_slice(heap, tape);
+    return whole;
+}
+
+// One `text` item of a result, tagged with the stream it is (`_meta.stream`).
+fn text_item[&h, &o](heap: &!h Heap, w: json.Writer, stream: &static [byte], text: &o [byte]) -> [heap] json.Writer {
+    var out = json.begin_object(heap, w);
+    out = json.put_key(heap, out, "type");
+    out = json.put_string(heap, out, "text");
+    out = json.put_key(heap, out, "text");
+    out = json.put_string(heap, out, text);
+    out = json.put_key(heap, out, "_meta");
+    out = json.begin_object(heap, out);
+    out = json.put_key(heap, out, "stream");
+    out = json.put_string(heap, out, stream);
+    out = json.end_object(heap, out);
+    return json.end_object(heap, out);
+}
+
+// Is the answer the tool's JSON document? When the call chose a format (`format`),
+// only `json`; csv and text are not one object and are text only.
+fn wants_json[&s, &t](src: &s [byte], tape: &t [int], tool: int, given: int) -> [] bool {
+    let selector = tools.structured(tool);
+    if len(selector) == 0 {
+        return false;
+    }
+    let v = json.get(src, tape, given, selector);
+    return v < 0 || json.string_equals(src, tape, v, "json");
+}
+
+// The result for a capture that ran: the tool's standard output exactly, as text
+// (and as structured content when it is the one JSON document), its standard error
+// when it wrote any, and its exit code. `isError` is any exit but 0.
+fn answered[&h, &i, &s, &t, &o, &e](heap: &!h Heap, io: &!i Io, src: &s [byte], tape: &t [int], id: int, tool: int, given: int, out: &o [byte], errors: &e [byte], code: int) -> [heap, io_write] int {
+    var w = opened(heap, src, tape, id);
+    w = json.put_key(heap, w, "result");
+    w = json.begin_object(heap, w);
+    w = json.put_key(heap, w, "content");
+    w = json.begin_array(heap, w);
+    w = text_item(heap, w, "stdout", out);
+    if len(errors) > 0 {
+        w = text_item(heap, w, "stderr", errors);
+    }
+    w = json.end_array(heap, w);
+    if bytes.equal(tools.output(tool), "document") && wants_json(src, tape, tool, given) && one_object(heap, out) {
+        // The tool ends its document with a newline, and `put_fragment`
+        // splices what it is given: a newline inside a response would end
+        // the line the client is reading, so the fragment stops before it.
+        var end = len(out);
+        while end > 0 && (out[end - 1] == byte_of(10) || out[end - 1] == byte_of(13) || out[end - 1] == byte_of(32)) {
+            end = end - 1;
+        }
+        w = json.put_key(heap, w, "structuredContent");
+        w = json.put_fragment(heap, w, out[0..end]);
+    }
+    w = json.put_key(heap, w, "isError");
+    w = json.put_bool(heap, w, code != 0);
+    w = json.put_key(heap, w, "_meta");
+    w = json.begin_object(heap, w);
+    w = json.put_key(heap, w, "exit_code");
+    w = json.put_int(heap, w, code);
+    w = json.end_object(heap, w);
+    w = json.end_object(heap, w);
+    w = json.end_object(heap, w);
+    return send(heap, io, w);
+}
+
+// The result when the server ended the tool, or could not start it: an error
+// record in the shape of the tool's own (`code`, `rule`, `message`, `hint`, `repair`,
+// `detail`), with the server's rule, and the bound that was met in `detail`.
+fn ended[&h, &i, &s, &t](heap: &!h Heap, io: &!i Io, src: &s [byte], tape: &t [int], id: int, code: &static [byte], rule: &static [byte], message: &static [byte], hint: &static [byte], errno: int, limit: int) -> [heap, io_write] int {
+    var record = json.writer(heap, 512);
+    record = json.begin_object(heap, record);
+    record = json.put_key(heap, record, "ok");
+    record = json.put_bool(heap, record, false);
+    record = json.put_key(heap, record, "command");
+    record = json.put_string(heap, record, "mcp");
+    record = json.put_key(heap, record, "error");
+    record = json.begin_object(heap, record);
+    record = json.put_key(heap, record, "code");
+    record = json.put_string(heap, record, code);
+    record = json.put_key(heap, record, "rule");
+    record = json.put_string(heap, record, rule);
+    record = json.put_key(heap, record, "message");
+    record = json.put_string(heap, record, message);
+    record = json.put_key(heap, record, "hint");
+    record = json.put_string(heap, record, hint);
+    record = json.put_key(heap, record, "repair");
+    record = json.begin_object(heap, record);
+    record = json.put_key(heap, record, "kind");
+    record = json.put_string(heap, record, "none");
+    record = json.put_key(heap, record, "reason");
+    record = json.put_string(heap, record, hint);
+    record = json.end_object(heap, record);
+    record = json.put_key(heap, record, "detail");
+    record = json.begin_object(heap, record);
+    record = json.put_key(heap, record, "errno");
+    record = json.put_int(heap, record, errno);
+    record = json.put_key(heap, record, "limit");
+    record = json.put_int(heap, record, limit);
+    record = json.end_object(heap, record);
+    record = json.end_object(heap, record);
+    record = json.end_object(heap, record);
+    let text = json.finish(record);
+
+    var w = opened(heap, src, tape, id);
+    w = json.put_key(heap, w, "result");
+    w = json.begin_object(heap, w);
+    w = json.put_key(heap, w, "content");
+    w = json.begin_array(heap, w);
+    borrow text as &tx in {
+        w = text_item(heap, w, "server", buffer.bytes(tx));
+    }
+    buffer.drop(heap, text);
+    w = json.end_array(heap, w);
+    w = json.put_key(heap, w, "isError");
+    w = json.put_bool(heap, w, true);
+    w = json.end_object(heap, w);
+    w = json.end_object(heap, w);
+    return send(heap, io, w);
+}
+
+fn call[&h, &x, &c, &i, &s, &t](heap: &!h Heap, exec: &x Exec("/opt/cancho-fetch/bin"), clock: &c Clock, io: &!i Io, src: &s [byte], tape: &t [int], id: int, config: Config) -> [heap, exec("/opt/cancho-fetch/bin"), clock, poll, io_write] int {
+    let params = json.get(src, tape, 0, "params");
+    let asked = json.get(src, tape, params, "name");
+    var tool = 0 - 1;
+    var k = 0;
+    while k < tools.count() {
+        if json.string_equals(src, tape, asked, tools.name(k)) {
+            tool = k;
+        }
+        k = k + 1;
+    }
+    if tool < 0 {
+        return refuse(heap, io, src, tape, id, 0 - 32602, "mcp.unknown-tool", "unknown tool; tools/list names the tool there is");
+    }
+    // Type faults first, all of them: the unknown keys and the rest are argv_for's.
+    let (fault_message, fault_data, found) = faults(heap, src, tape, tool, json.get(src, tape, params, "arguments"));
+    var refused_status = 0 - 1;
+    if found > 0 {
+        borrow fault_message as &fm in {
+            borrow fault_data as &fd in {
+                refused_status = refuse_about(heap, io, src, tape, id, 0 - 32602, buffer.bytes(fm), buffer.bytes(fd));
+            }
+        }
+    }
+    buffer.drop(heap, fault_message);
+    buffer.drop(heap, fault_data);
+    if found > 0 {
+        return refused_status;
+    }
+    let (entries, why) = argv_for(heap, src, tape, tool, json.get(src, tape, params, "arguments"));
+    if why.code != 0 {
+        process.drop(heap, entries);
+        return refuse_problem(heap, io, src, tape, id, tool, why);
+    }
+
+    let given = json.get(src, tape, json.get(src, tape, params, "arguments"), "stdin");
+    var input = box_slice(heap, 0, byte_of(0));
+    if given >= 0 {
+        if json.is_string(tape, given) && json.string_length(src, tape, given) > config.input {
+            process.drop(heap, entries);
+            unbox_slice(heap, input);
+            return ended(heap, io, src, tape, id, "PRECONDITION_FAILED", "mcp.input-too-large", "the `stdin` text is larger than the server's bound (--max-input) and the tool was not started", tools.hint_input(), 0, config.input);
+        }
+        if !json.is_string(tape, given) {
+            process.drop(heap, entries);
+            unbox_slice(heap, input);
+            return refuse_problem(heap, io, src, tape, id, tool, wrong("stdin", "a string", given));
+        }
+        unbox_slice(heap, input);
+        input = decoded(heap, src, tape, given);
+    }
+
+    let arguments = json.get(src, tape, params, "arguments");
+    var status = 0;
+    match process.channels_with_errors() {
+        process.ChannelsWithErrors::Failed(e) => {
+            status = ended(heap, io, src, tape, id, "GENERAL_ERROR", "mcp.spawn", "the channels to the tool could not be opened", "the server is out of descriptors; try again", e, 0);
+        }
+        process.ChannelsWithErrors::Ok(to_child, child_in, from_child, child_out, from_errors, child_errors) => {
+            borrow entries as &l in {
+                match exec_spawn(exec, tools.path(tool), process.list(l), "", Stdio::Pipe(child_in), Stdio::Pipe(child_out), Stdio::Pipe(child_errors)) {
+                    Spawned::Failed(e) => {
+                        process.close(to_child, from_child);
+                        pipe_close(from_errors);
+                        status = ended(heap, io, src, tape, id, "GENERAL_ERROR", "mcp.spawn", "the tool could not be started", "the server was built with a directory that does not hold the tool; rebuild it with scripts/mcp.py build --bin", e, 0);
+                    }
+                    Spawned::Ok(child) => {
+                        borrow input as &ir in {
+                            let (out, errs, ran) = process.capture_both(heap, clock, child, to_child, from_child, from_errors, contents(ir), config.most, tools.most_errors(), config.timeout);
+                            borrow out as &o in {
+                                borrow errs as &er in {
+                                    match ran {
+                                        process.Ran::Code(n) => {
+                                            status = answered(heap, io, src, tape, id, tool, arguments, buffer.bytes(o), buffer.bytes(er), n);
+                                        }
+                                        process.Ran::Signaled(bit) => {
+                                            status = ended(heap, io, src, tape, id, "GENERAL_ERROR", "mcp.signaled", "the tool was ended by a signal", "this is a bug in the tool; the call is not repeated by the server", bit, 0);
+                                        }
+                                        process.Ran::TimedOut => {
+                                            status = ended(heap, io, src, tape, id, "PRECONDITION_FAILED", "mcp.timeout", "the tool ran past the server's deadline (--timeout-ms) and was killed", tools.hint_timeout(), 0, config.timeout);
+                                        }
+                                        process.Ran::TooMuch => {
+                                            status = ended(heap, io, src, tape, id, "PRECONDITION_FAILED", "mcp.output-too-large", "the answer is larger than the server's bound (--max-output) and the tool was killed", tools.hint_too_large(), 0, config.most);
+                                        }
+                                        process.Ran::Failed(e) => {
+                                            status = ended(heap, io, src, tape, id, "GENERAL_ERROR", "mcp.spawn", "the tool could not be watched", "try again", e, 0);
+                                        }
+                                    }
+                                }
+                            }
+                            buffer.drop(heap, out);
+                            buffer.drop(heap, errs);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    unbox_slice(heap, input);
+    process.drop(heap, entries);
+    return status;
+}
+
+// ---- the loop ----------------------------------------------------------------
+
+// Answer one request line. A notification (no `id`) is never answered.
+fn handle[&h, &x, &c, &i, &s](heap: &!h Heap, exec: &x Exec("/opt/cancho-fetch/bin"), clock: &c Clock, io: &!i Io, src: &s [byte], config: Config) -> [heap, exec("/opt/cancho-fetch/bin"), clock, poll, io_write] int {
+    var tape = box_slice(heap, json.tape_len(src) + 3, 0);
+    var status = 0;
+    borrow mut tape as &!tw in {
+        let nodes = json.parse(src, contents(tw));
+        let t = contents(tw);
+        if nodes <= 0 {
+            status = refuse(heap, io, src, t, 0 - 1, 0 - 32700, "mcp.parse-error", "the line is not one JSON value");
+        } else if !json.is_object(t, 0) || !json.string_equals(src, t, json.get(src, t, 0, "jsonrpc"), "2.0") {
+            status = refuse(heap, io, src, t, json.get(src, t, 0, "id"), 0 - 32600, "mcp.invalid-request", "not a JSON-RPC 2.0 request");
+        } else {
+            let id = json.get(src, t, 0, "id");
+            let method = json.get(src, t, 0, "method");
+            if id >= 0 {
+                if json.string_equals(src, t, method, "initialize") {
+                    var w = opened(heap, src, t, id);
+                    w = json.put_key(heap, w, "result");
+                    w = json.begin_object(heap, w);
+                    w = json.put_key(heap, w, "protocolVersion");
+                    w = json.put_string(heap, w, "2025-06-18");
+                    w = json.put_key(heap, w, "capabilities");
+                    w = json.put_fragment(heap, w, "{\"tools\":{\"listChanged\":false}}");
+                    w = json.put_key(heap, w, "serverInfo");
+                    w = json.put_fragment(heap, w, "{\"name\":\"cancho-fetch\",\"version\":\"0.1.0\"}");
+                    w = json.end_object(heap, w);
+                    w = json.end_object(heap, w);
+                    status = send(heap, io, w);
+                } else if json.string_equals(src, t, method, "ping") {
+                    var w = opened(heap, src, t, id);
+                    w = json.put_key(heap, w, "result");
+                    w = json.put_fragment(heap, w, "{}");
+                    w = json.end_object(heap, w);
+                    status = send(heap, io, w);
+                } else if json.string_equals(src, t, method, "tools/list") {
+                    var w = opened(heap, src, t, id);
+                    w = json.put_key(heap, w, "result");
+                    w = json.put_fragment(heap, w, tools.list_result());
+                    w = json.end_object(heap, w);
+                    status = send(heap, io, w);
+                } else if json.string_equals(src, t, method, "tools/call") {
+                    status = call(heap, exec, clock, io, src, t, id, config);
+                } else {
+                    status = refuse(heap, io, src, t, id, 0 - 32601, "mcp.unknown-method", "the methods are initialize, ping, tools/list and tools/call");
+                }
+            }
+        }
+    }
+    unbox_slice(heap, tape);
+    return status;
+}
+
+fn serve[&h, &x, &c, &i](heap: &!h Heap, exec: &x Exec("/opt/cancho-fetch/bin"), clock: &c Clock, io: &!i Io, config: Config) -> [heap, exec("/opt/cancho-fetch/bin"), clock, poll, io_read, io_write] int {
+    while true {
+        let (line, read) = read_line(heap, io);
+        if read == 1 {
+            buffer.drop(heap, line);
+            return 0;
+        }
+        var status = 0;
+        if read == 2 {
+            status = refuse_bare(heap, io, 0 - 32600, "mcp.line-too-long", "the request line is longer than the 4 MiB the server reads");
+        } else {
+            borrow line as &l in {
+                status = handle(heap, exec, clock, io, buffer.bytes(l), config);
+            }
+        }
+        buffer.drop(heap, line);
+        if status != 0 {
+            // The client is gone or its pipe failed; there is no one to answer.
+            return 0;
+        }
+    }
+    return 0;
+}
+
+// `mcp introspect`: the server describes itself, as the tool does (generated).
+fn describe[&i](io: &!i Io) -> [io_write] int {
+    write_bytes(io, tools.introspect());
+    putchar(io, 10);
+    var status = 0;
+    match flush_out(io) {
+        Done::Ok(n) => {
+        }
+        Done::Failed(e) => {
+            status = 1;
+        }
+    }
+    return status;
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi);
+    release(fs);
+    release(net);
+    release(signals);
+    let bin = narrow(exec, "/opt/cancho-fetch/bin");
+    var console = io;
+    var h = heap;
+    var status = 0;
+    borrow args as &g in {
+        let (config, why) = configure(g);
+        borrow mut console as &!i in {
+            if arg_count(g) == 2 && bytes.equal(arg(g, 1), "introspect") {
+                status = describe(i);
+            } else if len(why) > 0 {
+                io.error_all(i, "mcp: ");
+                io.error_all(i, why);
+                io.error_all(i, "\n");
+                status = 2;
+            } else {
+                borrow bin as &x in {
+                    borrow clock as &c in {
+                        borrow mut h as &!hh in {
+                            status = serve(hh, x, c, i, config);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    release(bin);
+    release(clock);
+    release(console);
+    release(h);
+    release(args);
+    return status;
+}

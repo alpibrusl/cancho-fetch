@@ -271,6 +271,51 @@
           "type": "integer",
           "minimum": 0
         },
+        "redirects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "enum": [
+                  301,
+                  302,
+                  303,
+                  307,
+                  308
+                ]
+              },
+              "from": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              },
+              "to_path": {
+                "type": "string"
+              },
+              "method": {
+                "enum": [
+                  "get",
+                  "head",
+                  "post"
+                ]
+              }
+            },
+            "required": [
+              "status",
+              "from",
+              "path",
+              "to",
+              "to_path",
+              "method"
+            ],
+            "additionalProperties": false
+          }
+        },
         "peer": {
           "type": "string"
         },
@@ -288,6 +333,7 @@
         "headers",
         "body",
         "body_bytes",
+        "redirects",
         "peer",
         "milliseconds"
       ],

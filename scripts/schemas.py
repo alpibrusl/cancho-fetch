@@ -111,6 +111,12 @@ SCHEMAS = {
         "headers": {"type": "array", "items": obj({"name": {"type": "string"}, "value": {"type": "string"}})},
         "body": TB,
         "body_bytes": NAT,
+        "redirects": {"type": "array", "items": obj({
+            "status": {"enum": [301, 302, 303, 307, 308]},
+            "from": {"type": "string"}, "path": {"type": "string"},
+            "to": {"type": "string"}, "to_path": {"type": "string"},
+            "method": {"enum": ["get", "head", "post"]},
+        })},
         "peer": {"type": "string"},
         "milliseconds": NAT,
     })),

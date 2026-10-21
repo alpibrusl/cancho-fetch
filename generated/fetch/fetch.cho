@@ -20,7 +20,7 @@ fn private_ok() -> [] bool {
 fn via_0[&h, &k, &o, &p](heap: &!h Heap, clock: &k Clock, out: &o Out("127.0.0.1:18080"), plan: &p fetchcore.Plan) -> [heap, clock, poll, net_out("127.0.0.1:18080")] fetchcore.Answer {
     match tcp_connect(out, fetchcore.dial_host(hosts(), 0), fetchcore.dial_port(hosts(), 0)) {
         Dialed::Ok(conn) => {
-            return fetchcore.exchange(heap, clock, conn, plan, fetchcore.authority(hosts(), 0), private_ok());
+            return fetchcore.exchange(heap, clock, conn, plan, fetchcore.authority(hosts(), 0), hosts(), private_ok());
         }
         Dialed::Failed(errno) => {
             return fetchcore.dial_failed(heap, errno);
@@ -31,7 +31,7 @@ fn via_0[&h, &k, &o, &p](heap: &!h Heap, clock: &k Clock, out: &o Out("127.0.0.1
 fn via_1[&h, &k, &o, &p](heap: &!h Heap, clock: &k Clock, out: &o Out("127.0.0.1:18081"), plan: &p fetchcore.Plan) -> [heap, clock, poll, net_out("127.0.0.1:18081")] fetchcore.Answer {
     match tcp_connect(out, fetchcore.dial_host(hosts(), 1), fetchcore.dial_port(hosts(), 1)) {
         Dialed::Ok(conn) => {
-            return fetchcore.exchange(heap, clock, conn, plan, fetchcore.authority(hosts(), 1), private_ok());
+            return fetchcore.exchange(heap, clock, conn, plan, fetchcore.authority(hosts(), 1), hosts(), private_ok());
         }
         Dialed::Failed(errno) => {
             return fetchcore.dial_failed(heap, errno);
@@ -44,21 +44,43 @@ fn run[&h, &g, &i, &k, &q0, &q1](heap: &!h Heap, args: &g Args, io: &!i Io, cloc
     if which != 0 {
         return describe.answer(heap, io, which, fetchcore.tool(), fetchcore.built());
     }
-    let plan = fetchcore.plan(heap, args, hosts());
+    var plan = fetchcore.plan(heap, args, hosts());
+    var refused = false;
+    borrow plan as &r in {
+        refused = fetchcore.refused(r);
+    }
     var status = 0;
-    borrow plan as &p in {
-        if fetchcore.refused(p) {
+    if refused {
+        borrow plan as &p in {
             status = fetchcore.refuse(heap, io, p);
-        } else {
+        }
+        fetchcore.drop_plan(heap, plan);
+        return status;
+    }
+    var answer = fetchcore.nothing(heap);
+    var finished = false;
+    while !finished {
+        borrow plan as &p in {
             let pick = fetchcore.host_of(p);
             if pick == 0 {
-                let answer = via_0(heap, clock, o0, p);
-                status = fetchcore.respond(heap, io, p, answer);
+                answer = fetchcore.replace(heap, answer, via_0(heap, clock, o0, p));
             } else {
-                let answer = via_1(heap, clock, o1, p);
-                status = fetchcore.respond(heap, io, p, answer);
+                answer = fetchcore.replace(heap, answer, via_1(heap, clock, o1, p));
             }
         }
+        var again = false;
+        borrow answer as &a in {
+            again = fetchcore.follows(a);
+        }
+        if again {
+            plan = fetchcore.retarget(heap, plan, answer, hosts());
+            answer = fetchcore.nothing(heap);
+        } else {
+            finished = true;
+        }
+    }
+    borrow plan as &p in {
+        status = fetchcore.respond(heap, io, p, answer);
     }
     fetchcore.drop_plan(heap, plan);
     return status;

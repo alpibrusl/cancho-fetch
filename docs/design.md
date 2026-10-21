@@ -238,8 +238,9 @@ manifest gate. `tests/conformance/test_fetch.py` runs two builds against loopbac
 * **`conn_peer` works on a client connection**, and the peer is in the envelope (`data.peer`). A build without
   `--allow-private` refuses a loopback peer with `fetch.peer-not-public` after connecting and before sending a byte
   (the test checks the server received nothing). The check is on the address the connection actually has, so it holds
-  for a name that resolves somewhere private. **Claim confirmed for IPv4**; the IPv6 ranges (`::1`, `fc00::/7`, `fe80::/10`,
-  mapped IPv4) are not in the check yet and are a step-2 item.
+  for a name that resolves somewhere private. **Claim confirmed for IPv4**; the IPv6 ranges are now in the check too (`::/96`, mapped IPv4 and NAT64 by
+  their embedded address, `fc00::/7`, `fe80::/10`, `ff00::/8`, `2001:db8::/32`), held by `tests/peer_test.cho` (`cancho test`),
+  because this environment has no IPv6 socket to dial; an end-to-end IPv6 dial is therefore **not** measured.
 * **The deadline holds after the name is resolved**: a server that accepts and goes silent is cut at the deadline
   (`--timeout-ms 500` answered in 503 ms), in the head and in the body. **The resolver caveat of §5.5 is not measured**:
   a resolver that never answers needs a network namespace this environment does not have, so the claim stays as written
@@ -252,6 +253,71 @@ manifest gate. `tests/conformance/test_fetch.py` runs two builds against loopbac
   wire module's `valid_extra` is correct for its own callers (they pass lines, not values); the lesson is that a
   caller building a line from a value must check the value.
 * **Not done in step 1**: CI (the pinned compiler has to be built at 597e6b0 first, minutes of work per run, to be
-  cached), the MCP server, IPv6 peer ranges, a build-time refusal of an `https://` entry (the generator rejects
+  cached), the MCP server, a build-time refusal of an `https://` entry (the generator rejects
   anything but `http://host[:port]`).
+
+## 8.2 Step 3 as built: `post`
+
+`fetch post PATH --body TEXT --content-type TYPE`. Decisions, each with its reason:
+
+* **`--body` only; `--body-stdin` is not built.** Reading standard input would add `io_read` to the authority row for
+  a convenience; an argument carries the request bodies an agent writes (JSON, a form), up to **65,536 bytes**
+  (`fetch.request-body-too-large` beyond), and the row stays as it was. A body from stdin is a later step if a caller needs
+  one over 64 KiB, and the row will say so when it does.
+* **`--content-type` is required with `--body`** (`fetch.body-required` names both). A default type would be a guess that
+  is right for one server and silently wrong for the next; the error's hint gives an example, which is what a caller
+  needs to repair it.
+* **`get` and `head` with `--body` are refused** (`fetch.body-not-allowed`), not ignored: a body that was never sent is a
+  surprise nobody asked for.
+* The body is sent after the head, under the same deadline; framing is `Content-Length` (the body is whole in memory,
+  capped), never chunked. Header injection through `--content-type` is refused the same way as through `--accept`.
+* The authority row is unchanged by `post` (the same `net_out` hosts, no `io_read`). `introspect`'s reversibility stays
+  `irreversible-consequential` for the tool as a whole; `get`/`head` are idempotent and `post` is not, which the MCP
+  annotations (step 4) will say per method.
+
+## 8.3 Step 4 as built: the MCP server
+
+`server/mcp.cho` (copied from cancho-table's, itself a copy of cancho-tools'; the third copy, so the drift risk the
+cancho-table doc names is now three-fold and the shared-module split it recommends is more worth doing), `scripts/mcp.py`
+(the generator: `generated/mcp/tools.cho` from `fetch introspect`), `server/ceiling.toml`, `manifests/mcp.authority.json`,
+and `tests/conformance/test_mcp.py` (10 tests, through the real server and the real `fetch` against loopback).
+
+* **Changes from the cancho-table copy**: no `--root` (the tool reads no file, and its hosts are baked, not chosen by the
+  server); `openWorldHint` is derived from `net_out` in the tool's row (true here, false for a tool without it);
+  the `stdin` property and `mcp.input-*` rules stay in the code (generic) and are inert, because `fetch` reads no standard
+  input and `introspect` says so.
+* **Annotations, derived from `fetch introspect`**: `readOnlyHint` false, `destructiveHint` true, `idempotentHint` false,
+  `openWorldHint` true. They are per tool, so `get` shares `post`'s conservative answer. A per-method annotation needs
+  two tools (`fetch_get`, `fetch_post`), which the generator does not do; not built.
+* **The server's own row** has no `net_out`, `net_in`, `ffi` or file label, only `exec` narrowed to the binary directory
+  (checked by a test): the network authority stays in the tool, whose row lists the hosts.
+* **Found: the MCP server's output bound is racy.** The same call (a 100,000-byte body, `--max-output 2000`) ends as
+  `mcp.output-too-large` in about half the runs and as `mcp.signaled` in the rest: the tool is ended by a signal before
+  the server's verdict is set. It is in the copied server or `std.process.capture_both`, not in `fetch`; I have not run
+  cancho-table's server against it to see whether it shows there too. The test accepts either rule and says why. Open.
+* **Found in `fetch`**: a `;` in a flag's help text splits a row of the flag table, so `introspect` listed garbage flags
+  (this showed up only because the generator reads them). Fixed, and `test_introspect_flags_are_well_formed` holds it.
+* **Not built**: the `enum` of baked hosts in the `host` property (needs `introspect` to list the hosts), and a
+  `--with fetch` entry in a combined server.
+
+## 8.4 Step 5 as built: redirects
+
+`--max-redirects N` (0 to 5, default 0). With 0 a 3xx is the answer, as before. With N, a 301, 302, 303, 307 or 308 with a
+`Location` is followed up to N times, and an N+1th is `fetch.redirect-limit`.
+
+* **Only to a host the build was given, by a target checked before a socket opens.** A `Location` is an absolute path on
+  the same host, or `http://AUTHORITY/path` where AUTHORITY is one of the baked entries (`h` and `h:80` are one; host
+  names compare case-insensitively; the port otherwise exactly). Everything else is `fetch.redirect-not-allowed` with
+  `detail.location` and `detail.reason`: another host, `https://`, a relative path, a network-path (`//h/x`), userinfo
+  (`http://baked@evil/` has the authority `baked@evil`, which is no entry), a path the tool would not send. The test sends
+  seven such locations and checks that the other baked host's server received nothing. No "follow, then check".
+* **Method**: 301, 302 and 303 turn a `post` into a `get` without its body or `Content-Type` (what browsers do, and
+  recorded in the hop); 307 and 308 keep the method and the body. `head` stays `head`.
+* **Deadline**: `--timeout-ms` is for the chain; each hop starts with what is left (never less than 1 ms).
+* **Envelope**: `data.redirects` is always present (empty without a hop), each hop `{status, from, path, to, to_path,
+  method}`; `host`, `path`, `method` and `status` describe the last request. Fragments are dropped from a `Location`.
+* **Where the loop is**: the generated main (each baked host has its own `Out`, so the next hop's capability is picked by
+  index); `exchange` decides the target and returns it, `retarget` rebuilds the plan. The authority row did not change.
+* **Not built**: a redirect to an `https://` baked host (no HTTPS yet); credentials are not sent at all, so the
+  cross-host credential-leak case does not arise (it will with credentials, and the rule then is: dropped on a host change).
 

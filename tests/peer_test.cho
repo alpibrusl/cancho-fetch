@@ -1,0 +1,57 @@
+edition 11;
+
+import std.addr;
+import fetchcore;
+
+// 0 when the claim holds, 1 when not; a test answers the sum of its claims.
+fn want(claim: bool) -> [] int {
+    if claim {
+        return 0;
+    }
+    return 1;
+}
+
+fn v6(a: int, b: int, c: int, d: int) -> [] addr.Peer {
+    return addr.v6(a, b, c, d, 80);
+}
+
+fn test_v4_ranges() -> [] int {
+    var bad = 0;
+    bad = bad + want(fetchcore.private_peer(addr.v4(127, 0, 0, 1, 80)));
+    bad = bad + want(fetchcore.private_peer(addr.v4(10, 1, 2, 3, 80)));
+    bad = bad + want(fetchcore.private_peer(addr.v4(169, 254, 169, 254, 80)));
+    bad = bad + want(fetchcore.private_peer(addr.v4(172, 16, 0, 1, 80)));
+    bad = bad + want(fetchcore.private_peer(addr.v4(192, 168, 1, 1, 80)));
+    bad = bad + want(fetchcore.private_peer(addr.v4(100, 64, 0, 1, 80)));
+    bad = bad + want(!fetchcore.private_peer(addr.v4(93, 184, 216, 34, 80)));
+    bad = bad + want(!fetchcore.private_peer(addr.v4(172, 32, 0, 1, 80)));
+    return bad;
+}
+
+fn test_v6_private() -> [] int {
+    var bad = 0;
+    bad = bad + want(fetchcore.private_peer(v6(0, 0, 0, 1)));
+    bad = bad + want(fetchcore.private_peer(v6(0, 0, 0, 0)));
+    bad = bad + want(fetchcore.private_peer(v6(0xfd000000, 0, 0, 1)));
+    bad = bad + want(fetchcore.private_peer(v6(0xfe800000, 0, 0, 1)));
+    bad = bad + want(fetchcore.private_peer(v6(0xff020000, 0, 0, 1)));
+    bad = bad + want(fetchcore.private_peer(v6(0x20010db8, 0, 0, 1)));
+    return bad;
+}
+
+fn test_v6_embedded_v4() -> [] int {
+    var bad = 0;
+    bad = bad + want(fetchcore.private_peer(v6(0, 0, 0xffff, 0x7f000001)));
+    bad = bad + want(fetchcore.private_peer(v6(0, 0, 0xffff, 0x0a000001)));
+    bad = bad + want(!fetchcore.private_peer(v6(0, 0, 0xffff, 0x5db8d822)));
+    bad = bad + want(fetchcore.private_peer(v6(0x0064ff9b, 0, 0, 0x7f000001)));
+    bad = bad + want(!fetchcore.private_peer(v6(0x0064ff9b, 0, 0, 0x5db8d822)));
+    return bad;
+}
+
+fn test_v6_public() -> [] int {
+    var bad = 0;
+    bad = bad + want(!fetchcore.private_peer(v6(0x26064700, 0, 0, 0x1111)));
+    bad = bad + want(!fetchcore.private_peer(v6(0x20014860, 0x4860, 0, 0x8888)));
+    return bad;
+}
