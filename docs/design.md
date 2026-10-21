@@ -275,3 +275,28 @@ manifest gate. `tests/conformance/test_fetch.py` runs two builds against loopbac
   `irreversible-consequential` for the tool as a whole; `get`/`head` are idempotent and `post` is not, which the MCP
   annotations (step 4) will say per method.
 
+## 8.3 Step 4 as built: the MCP server
+
+`server/mcp.cho` (copied from cancho-table's, itself a copy of cancho-tools'; the third copy, so the drift risk the
+cancho-table doc names is now three-fold and the shared-module split it recommends is more worth doing), `scripts/mcp.py`
+(the generator: `generated/mcp/tools.cho` from `fetch introspect`), `server/ceiling.toml`, `manifests/mcp.authority.json`,
+and `tests/conformance/test_mcp.py` (10 tests, through the real server and the real `fetch` against loopback).
+
+* **Changes from the cancho-table copy**: no `--root` (the tool reads no file, and its hosts are baked, not chosen by the
+  server); `openWorldHint` is derived from `net_out` in the tool's row (true here, false for a tool without it);
+  the `stdin` property and `mcp.input-*` rules stay in the code (generic) and are inert, because `fetch` reads no standard
+  input and `introspect` says so.
+* **Annotations, derived from `fetch introspect`**: `readOnlyHint` false, `destructiveHint` true, `idempotentHint` false,
+  `openWorldHint` true. They are per tool, so `get` shares `post`'s conservative answer. A per-method annotation needs
+  two tools (`fetch_get`, `fetch_post`), which the generator does not do; not built.
+* **The server's own row** has no `net_out`, `net_in`, `ffi` or file label, only `exec` narrowed to the binary directory
+  (checked by a test): the network authority stays in the tool, whose row lists the hosts.
+* **Found: the MCP server's output bound is racy.** The same call (a 100,000-byte body, `--max-output 2000`) ends as
+  `mcp.output-too-large` in about half the runs and as `mcp.signaled` in the rest: the tool is ended by a signal before
+  the server's verdict is set. It is in the copied server or `std.process.capture_both`, not in `fetch`; I have not run
+  cancho-table's server against it to see whether it shows there too. The test accepts either rule and says why. Open.
+* **Found in `fetch`**: a `;` in a flag's help text splits a row of the flag table, so `introspect` listed garbage flags
+  (this showed up only because the generator reads them). Fixed, and `test_introspect_flags_are_well_formed` holds it.
+* **Not built**: the `enum` of baked hosts in the `host` property (needs `introspect` to list the hosts), and a
+  `--with fetch` entry in a combined server.
+

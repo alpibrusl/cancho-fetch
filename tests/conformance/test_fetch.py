@@ -311,6 +311,15 @@ class Fetch(unittest.TestCase):
         self.assertEqual(doc["error"]["detail"]["peer"], "127.0.0.1:%d" % PORT)
         self.assertEqual([r for r in s.requests if r], [])
 
+    def test_introspect_flags_are_well_formed(self):
+        """A `;` in a help text splits a row of the flag table: the flags then list garbage (found by the MCP generator)."""
+        rc, doc, _ = run(STRICT, "introspect")
+        names = [f["name"] for f in doc["flags"]]
+        self.assertEqual(names, ["--host", "--max-bytes", "--timeout-ms", "--accept", "--body", "--content-type", "--format"])
+        for f in doc["flags"]:
+            self.assertIn(f["kind"].split(":")[0], ("text", "nat", "choice", "bool"), f)
+            self.assertTrue(f["help"], f)
+
     def test_introspect_authority_is_the_baked_hosts(self):
         rc, doc, _ = run(STRICT, "introspect")
         rows = {(l["name"], l["argument"]) for l in doc["authority"]["labels"]}

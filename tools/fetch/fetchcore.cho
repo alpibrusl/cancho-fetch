@@ -30,7 +30,7 @@ pub fn extra() -> [] &static [byte] {
 }
 
 pub fn flag_table() -> [] &static [byte] {
-    return "host||text|none||which baked host to use: the host (or host:port) of one of this build's allowed entries; required when more than one is baked in;max-bytes||nat|none|1048576|the most response body bytes accepted (1 to 16777216); a larger body is fetch.body-too-large;timeout-ms||nat|none|10000|the deadline for the whole request once the name has resolved, in milliseconds (1 to 60000);accept||text|none||the Accept request header;body||text|none||the request body, for post (at most 65536 bytes);content-type||text|none||the Content-Type of the request body, required with --body;format||choice:json/text|none|json|json for an envelope, text writes the response body to standard output";
+    return "host||text|none||which baked host to use: the host (or host:port) of one of this build's allowed entries, required when more than one is baked in;max-bytes||nat|none|1048576|the most response body bytes accepted (1 to 16777216), a larger body is fetch.body-too-large;timeout-ms||nat|none|10000|the deadline for the whole request once the name has resolved, in milliseconds (1 to 60000);accept||text|none||the Accept request header;body||text|none||the request body, for post (at most 65536 bytes);content-type||text|none||the Content-Type of the request body, required with --body;format||choice:json/text|none|json|json for an envelope, text writes the response body to standard output";
 }
 
 pub fn tool() -> [] describe.Tool {
