@@ -102,9 +102,16 @@ class Server:
         self.reply = reply
         self.hold = hold
         self.requests = []
-        self.sock = socket.socket()
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind(("127.0.0.1", port))
+        # `localhost` may resolve to ::1 first (a CI runner has IPv6, this sandbox does not): listen on both when we can.
+        try:
+            self.sock = socket.socket(socket.AF_INET6)
+            self.sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.sock.bind(("::", port))
+        except OSError:
+            self.sock = socket.socket()
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.sock.bind(("127.0.0.1", port))
         self.sock.listen(8)
         self.stop = False
         self.thread = threading.Thread(target=self.loop, daemon=True)
