@@ -1,0 +1,297 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/alpibrusl/cancho-fetch/schemas/fetch.v1.json",
+  "title": "fetch.v1",
+  "description": "One JSON object on one line. ok is false exactly when errors is present; error is its first element.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "type": "boolean"
+    },
+    "command": {
+      "const": "fetch"
+    },
+    "schema": {
+      "const": "fetch.v1"
+    },
+    "data": {
+      "$ref": "#/$defs/data"
+    },
+    "error": {
+      "$ref": "#/$defs/error"
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/error"
+      },
+      "minItems": 1
+    },
+    "meta": {
+      "$ref": "#/$defs/meta"
+    }
+  },
+  "required": [
+    "ok",
+    "command",
+    "schema",
+    "meta"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "ok": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "error"
+              ]
+            },
+            {
+              "required": [
+                "errors"
+              ]
+            }
+          ]
+        }
+      },
+      "else": {
+        "required": [
+          "error",
+          "errors"
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "text_or_bytes": {
+      "description": "UTF-8 text as a string; other bytes as base64 (RFC 4648 section 4, padded).",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "b64": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9+/]*={0,2}$"
+            }
+          },
+          "required": [
+            "b64"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "repair": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "retry"
+            },
+            "argv": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "kind",
+            "argv"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "none"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "choose"
+            },
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "argv": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "argv"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "options"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "enum": [
+            "GENERAL_ERROR",
+            "INVALID_ARGS",
+            "NOT_FOUND",
+            "PERMISSION_DENIED",
+            "CONFLICT",
+            "PRECONDITION_FAILED"
+          ]
+        },
+        "rule": {
+          "type": "string",
+          "pattern": "^[a-z]+\\.[a-z0-9-]+$"
+        },
+        "message": {
+          "type": "string"
+        },
+        "hint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repair": {
+          "$ref": "#/$defs/repair"
+        },
+        "detail": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "code",
+        "rule",
+        "message",
+        "hint",
+        "repair",
+        "detail"
+      ],
+      "additionalProperties": false
+    },
+    "meta": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "enum": [
+            "get",
+            "head"
+          ]
+        },
+        "host": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "status": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "reason": {
+          "type": "string"
+        },
+        "headers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "body": {
+          "$ref": "#/$defs/text_or_bytes"
+        },
+        "body_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "peer": {
+          "type": "string"
+        },
+        "milliseconds": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "method",
+        "host",
+        "path",
+        "status",
+        "reason",
+        "headers",
+        "body",
+        "body_bytes",
+        "peer",
+        "milliseconds"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -50,8 +50,10 @@ fetch post <path> [--host H] --body-stdin | --body TEXT ...
   there is exactly one). A value outside the list is `fetch.host-not-allowed`, with the baked list in `data` so the caller
   can repair. A **full URL** is not accepted in v1: `fetch get https://elsewhere/x` is `fetch.url-not-a-path`. Reason: a
   URL is a second place a host can be written, and the only host that matters is the baked one.
-* **The scheme follows the baked port.** An entry `host:443` is HTTPS, `host:80` is HTTP; any other port is refused at
-  build time by `fetch_build.py` (v1). There is no flag for the scheme, so a caller cannot downgrade.
+* **The scheme is part of the baked entry, not of the request.** An entry is `scheme://host[:port]` (`http://` is built
+  in step 1, `https://` arrives with step 2); the port defaults to the scheme's. There is no flag for the scheme, so a
+  caller cannot downgrade. (This replaces an earlier draft in which the scheme followed the port: a service on
+  `:8443` or `:8080` is ordinary, and a rule that guesses the scheme from a number is a rule that is wrong somewhere.)
 * **Request headers** are an allow-list (`Accept`, `Accept-Language`, `Content-Type`, `If-None-Match`, `If-Modified-Since`,
   `User-Agent`, `X-*`). `Authorization`, `Cookie`, `Proxy-*` and `Host` are `fetch.header-forbidden` in v1 (open
   question 2: credentials).
@@ -221,3 +223,35 @@ the other side" has no answer a row can show).
    hosts only?
 7. **Classification** as `irreversible-consequential` for `GET`: right, or `read-only` with a warning?
 8. **Name of the repository and of the binary** (`cancho-fetch`, `fetch`): the MCP tool is `fetch`.
+
+## 8.1 Step 1, as built and measured
+
+`scripts/fetch_build.py --host http://127.0.0.1:18080 --host http://127.0.0.1:18081 [--allow-private]` writes
+`generated/fetch/fetch.cho` (one `via_i` per host, each holding the `Out("host:port")` its `narrow` produced) and runs the
+manifest gate. `tests/conformance/test_fetch.py` runs two builds against loopback servers: 23 tests, all passing.
+
+* **The row is derived, and equals the hosts.** For the two hosts above the pinned compiler (597e6b0) reports
+  `args, clock, conn_read, conn_write, err_write, heap, io_write, net_out("127.0.0.1:18080"), net_out("127.0.0.1:18081"), poll`,
+  `bounded: true`, no `net_in`, no `ffi`, no `file_*`, `dir_*` or `exec`. `scripts/manifest.py` compares the `net_out`
+  arguments with the hosts in `generated/fetch/fetch.cho` and fails on any difference, so adding a host in the source
+  without going through the build input is a gate failure. **Claim confirmed.**
+* **`conn_peer` works on a client connection**, and the peer is in the envelope (`data.peer`). A build without
+  `--allow-private` refuses a loopback peer with `fetch.peer-not-public` after connecting and before sending a byte
+  (the test checks the server received nothing). The check is on the address the connection actually has, so it holds
+  for a name that resolves somewhere private. **Claim confirmed for IPv4**; the IPv6 ranges (`::1`, `fc00::/7`, `fe80::/10`,
+  mapped IPv4) are not in the check yet and are a step-2 item.
+* **The deadline holds after the name is resolved**: a server that accepts and goes silent is cut at the deadline
+  (`--timeout-ms 500` answered in 503 ms), in the head and in the body. **The resolver caveat of §5.5 is not measured**:
+  a resolver that never answers needs a network namespace this environment does not have, so the claim stays as written
+  (not enforceable during `getaddrinfo`) and the tests say nothing about it.
+* **Framing**: `Content-Length`, chunked, and close-delimited bodies, the cap on each (a 5,000-byte body under a 100-byte cap is
+  `fetch.body-too-large` for all three; a body of exactly 100 is accepted), `HEAD` without a body, truncated and non-HTTP answers.
+* **A defect the tests found**: `valid_extra` of the shared wire module accepts a *run* of header lines, so an `--accept`
+  holding CRLF passed as two headers (`Accept: x` and `X-Evil: 1`). `fetch` now refuses a value with a control byte
+  (`fetch.header-malformed`) before the wire module sees it; `test_header_injection_is_refused` holds the case. The
+  wire module's `valid_extra` is correct for its own callers (they pass lines, not values); the lesson is that a
+  caller building a line from a value must check the value.
+* **Not done in step 1**: CI (the pinned compiler has to be built at 597e6b0 first, minutes of work per run, to be
+  cached), the MCP server, IPv6 peer ranges, a build-time refusal of an `https://` entry (the generator rejects
+  anything but `http://host[:port]`).
+
