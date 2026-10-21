@@ -1131,12 +1131,21 @@ pub fn exchange[&h, &k, &p, &a, &l, &m, &o, &y, &t, &u](heap: &!h Heap, clock: &
                     // What followed the head in the same reads.
                     let left = filled - body_start;
                     if st[3] == 0 && left > 0 {
-                        var k = 0;
-                        while k < left {
-                            rd[k] = acc[body_start + k];
-                            k = k + 1;
+                        // The head read can hold far more body than `rd` does (a read fills `acc`): feed it in pieces.
+                        var off = 0;
+                        while off < left && st[3] == 0 {
+                            var piece = left - off;
+                            if piece > len(rd) {
+                                piece = len(rd);
+                            }
+                            var k = 0;
+                            while k < piece {
+                                rd[k] = acc[body_start + off + k];
+                                k = k + 1;
+                            }
+                            body = absorb(heap, body, rd, piece, st, plan.max_bytes);
+                            off = off + piece;
                         }
-                        body = absorb(heap, body, rd, left, st, plan.max_bytes);
                     } else if st[0] == mode_none() {
                         st[3] = 1;
                     }

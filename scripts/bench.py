@@ -5,8 +5,9 @@ loopback server in another process.
     python3 scripts/bench.py [--binary build/fetch] [--runs N] [--json out.json]
 
 Without --binary it builds one for the two benchmark hosts (http://127.0.0.1:18090, https://localhost:18453) with a
-throwaway certificate authority. Every measurement is one `fork/exec` of the tool with its stdout sent to /dev/null, timed
-with `wait4` (the child's own CPU and its peak resident set come from the same call). The server holds the response in
+throwaway certificate authority. Every measurement is one `fork/exec` of the tool with its output sent to /dev/null, timed
+by scripts/maxrss.c with `wait4` (the child's own CPU and its peak resident set come from the same call; a launcher in C because a
+child forked from Python inherits Python's 24 MB high-water mark). The server holds the response in
 memory and sends it with one `sendall`, so it is not the thing being measured, but it shares the machine: read the numbers
 as a comparison made here, on this machine, in this run.
 
@@ -85,23 +86,14 @@ def serve(context_dir):
         time.sleep(3600)
 
 
+LAUNCHER = None
+
+
 def measure(argv):
-    """(wall seconds, cpu seconds, peak RSS in KiB, exit status, bytes written to stdout)."""
-    r, w = os.pipe()
-    t0 = time.perf_counter()
-    p = subprocess.Popen(argv, stdout=w, stderr=subprocess.DEVNULL)
-    os.close(w)
-    total = 0
-    while True:
-        chunk = os.read(r, 1 << 20)
-        if not chunk:
-            break
-        total += len(chunk)
-    os.close(r)
-    _, status, ru = os.wait4(p.pid, 0)
-    wall = time.perf_counter() - t0
-    p.returncode = os.waitstatus_to_exitcode(status)
-    return wall, ru.ru_utime + ru.ru_stime, ru.ru_maxrss, p.returncode, total
+    """(wall seconds, cpu seconds, peak RSS in KiB, exit status), by scripts/maxrss.c (output discarded)."""
+    out = subprocess.run([LAUNCHER, *argv], capture_output=True, text=True).stdout.split()
+    wall, cpu, rss, status = float(out[0]) / 1e6, float(out[1]) / 1e6, int(out[2]), int(out[3])
+    return wall, cpu, rss, status, 0
 
 
 def summarise(samples):
@@ -112,8 +104,7 @@ def summarise(samples):
         "max_ms": walls[-1] * 1000,
         "cpu_ms": statistics.median(s[1] for s in samples) * 1000,
         "rss_kib": statistics.median(s[2] for s in samples),
-        "out_bytes": samples[0][4],
-        "failed": sum(1 for s in samples if s[3] != 0),
+                "failed": sum(1 for s in samples if s[3] != 0),
     }
 
 
@@ -123,7 +114,10 @@ def main():
     ap.add_argument("--runs", type=int, default=0, help="override the number of runs of every case")
     ap.add_argument("--json")
     a = ap.parse_args()
+    global LAUNCHER
     work = pathlib.Path(tempfile.mkdtemp(prefix="fetch-bench-"))
+    LAUNCHER = str(work / "maxrss")
+    subprocess.run(["cc", "-O2", "-o", LAUNCHER, str(ROOT / "scripts" / "maxrss.c")], check=True)
     import test_fetch as tf  # the certificate maker of the tests
     roots, _ = tf.make_certificates(work)
     binary = a.binary
@@ -162,9 +156,9 @@ def main():
                 row = summarise(samples)
                 row.update({"scheme": scheme, "size": size, "tool": name, "runs": runs})
                 results.append(row)
-                print("%-5s %-4s %-13s median %8.1f ms  [%7.1f..%7.1f]  cpu %8.1f ms  rss %7.0f KiB  out %9d B  failed %d"
+                print("%-5s %-4s %-13s median %8.1f ms  [%7.1f..%7.1f]  cpu %8.1f ms  rss %7.0f KiB  failed %d"
                       % (scheme, size, name, row["median_ms"], row["min_ms"], row["max_ms"], row["cpu_ms"], row["rss_kib"],
-                         row["out_bytes"], row["failed"]), flush=True)
+                         row["failed"]), flush=True)
     finally:
         server.terminate()
     if a.json:

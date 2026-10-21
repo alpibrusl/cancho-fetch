@@ -257,6 +257,19 @@ class Fetch(unittest.TestCase):
             s.close()
             time.sleep(0.05)
 
+    def test_a_body_larger_than_the_first_read_buffers(self):
+        """Found by the benchmark: a response whose head and a long body arrive together left more body bytes after the head
+        than the 8 KiB read buffer holds, and the tool trapped (SIGILL). Every framing, with the whole response in one send."""
+        big = b"abcdefghij" * 20000  # 200,000 bytes
+        for name, reply in (("length", ok(big)),
+                            ("chunked", b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n%x\r\n%s\r\n0\r\n\r\n" % (len(big), big)),
+                            ("close", b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n" + big)):
+            s = self.serve(lambda req, r=reply: r)
+            rc, doc, _ = run(OPEN, "get", "/")
+            self.assertEqual((name, rc, doc["data"]["body_bytes"]), (name, 0, 200000), doc)
+            s.close()
+            time.sleep(0.05)
+
     def test_exactly_max_bytes(self):
         self.serve(lambda req: ok(b"y" * 100))
         rc, doc, _ = run(OPEN, "--max-bytes", "100", "get", "/")
