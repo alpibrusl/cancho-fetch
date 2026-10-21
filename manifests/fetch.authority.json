@@ -7,7 +7,6 @@
     "conn_read",
     "conn_write",
     "err_write",
-    "fs_read",
     "heap",
     "io_write",
     "net_out",
@@ -40,11 +39,6 @@
       "bounded": true
     },
     {
-      "name": "fs_read",
-      "argument": "/dev/urandom",
-      "bounded": true
-    },
-    {
       "name": "heap",
       "argument": null,
       "bounded": true
@@ -61,7 +55,7 @@
     },
     {
       "name": "net_out",
-      "argument": "localhost:18443",
+      "argument": "127.0.0.1:18081",
       "bounded": true
     },
     {
@@ -71,6 +65,7 @@
     }
   ],
   "never_touches": [
+    "the filesystem",
     "signals",
     "other programs",
     "foreign code"

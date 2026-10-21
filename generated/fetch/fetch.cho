@@ -10,11 +10,11 @@ import toolbox.describe;
 import fetchcore;
 
 fn hosts() -> [] &static [byte] {
-    return "http://127.0.0.1:18080;https://localhost:18443";
+    return "http://127.0.0.1:18080;http://127.0.0.1:18081";
 }
 
 fn roots() -> [] &static [byte] {
-    return "-----BEGIN CERTIFICATE-----\nMIIBhDCCASugAwIBAgIUEP9ioKK49RL3aHW0zslhKee73MIwCgYIKoZIzj0EAwIw\nEDEOMAwGA1UEAwwFc21va2UwHhcNMjYxMDIxMTE1NTE1WhcNMjYxMTIwMTE1NTE1\nWjAQMQ4wDAYDVQQDDAVzbW9rZTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABImE\nCC6xREl/Gucdk22x0YMahK1Zwwyxjf84KTfUCqAugN4QBhviUmwp+xt9BU4wTZJr\njlmLFcnEo5JaxwIjElujYzBhMB0GA1UdDgQWBBRBXU+FJzxWHsNyspwt5pHACQIH\nfDAfBgNVHSMEGDAWgBRBXU+FJzxWHsNyspwt5pHACQIHfDAPBgNVHRMBAf8EBTAD\nAQH/MA4GA1UdDwEB/wQEAwICBDAKBggqhkjOPQQDAgNHADBEAiAFllITinm23wlZ\nMrv9LUwAEgTh6QJFz+jujAvj0SIfdQIgMSt4m2M/OGsGxv0Wm0lPWywmgiD7/5a8\nLGJtOp5W2bg=\n-----END CERTIFICATE-----\n";
+    return "";
 }
 
 fn private_ok() -> [] bool {
@@ -32,7 +32,7 @@ fn via_0[&h, &k, &o, &p, &y](heap: &!h Heap, clock: &k Clock, out: &o Out("127.0
     }
 }
 
-fn via_1[&h, &k, &o, &p, &y](heap: &!h Heap, clock: &k Clock, out: &o Out("localhost:18443"), plan: &p fetchcore.Plan, entropy: &y [byte]) -> [heap, clock, poll, net_out("localhost:18443")] fetchcore.Answer {
+fn via_1[&h, &k, &o, &p, &y](heap: &!h Heap, clock: &k Clock, out: &o Out("127.0.0.1:18081"), plan: &p fetchcore.Plan, entropy: &y [byte]) -> [heap, clock, poll, net_out("127.0.0.1:18081")] fetchcore.Answer {
     match tcp_connect(out, fetchcore.dial_host(hosts(), 1), fetchcore.dial_port(hosts(), 1)) {
         Dialed::Ok(conn) => {
             return fetchcore.exchange(heap, clock, conn, plan, fetchcore.authority(hosts(), 1), hosts(), private_ok(), fetchcore.entry_secure(hosts(), 1), fetchcore.dial_host(hosts(), 1), roots(), entropy);
@@ -43,7 +43,7 @@ fn via_1[&h, &k, &o, &p, &y](heap: &!h Heap, clock: &k Clock, out: &o Out("local
     }
 }
 
-fn run[&h, &g, &i, &k, &z, &q0, &q1](heap: &!h Heap, args: &g Args, io: &!i Io, clock: &k Clock, entropy: &z [byte], o0: &q0 Out("127.0.0.1:18080"), o1: &q1 Out("localhost:18443")) -> [heap, args, io_write, err_write, clock, poll, net_out("127.0.0.1:18080"), net_out("localhost:18443")] int {
+fn run[&h, &g, &i, &k, &z, &q0, &q1](heap: &!h Heap, args: &g Args, io: &!i Io, clock: &k Clock, entropy: &z [byte], o0: &q0 Out("127.0.0.1:18080"), o1: &q1 Out("127.0.0.1:18081")) -> [heap, args, io_write, err_write, clock, poll, net_out("127.0.0.1:18080"), net_out("127.0.0.1:18081")] int {
     let which = cli.subcommand(args);
     if which != 0 {
         return describe.answer(heap, io, which, fetchcore.tool(), fetchcore.built());
@@ -97,8 +97,8 @@ fn main(world: World) -> [] int {
     release(signals);
     release(exec);
     release(tty);
-    let urandom = narrow(fs, "/dev/urandom");
-    let (o0, o1) = narrow(out, "127.0.0.1:18080", "localhost:18443");
+    release(fs);
+    let (o0, o1) = narrow(out, "127.0.0.1:18080", "127.0.0.1:18081");
     var status = 0;
     borrow mut heap as &!h in {
         borrow args as &g in {
@@ -106,9 +106,6 @@ fn main(world: World) -> [] int {
                 borrow clock as &k in {
                     region seed {
                         let entropy = alloc_slice[seed](32, byte_of(0));
-                        borrow urandom as &uf in {
-                            fs_read(uf, "/dev/urandom", entropy);
-                        }
                         borrow o0 as &r0 in {
                             borrow o1 as &r1 in {
                                 status = run(h, g, i, k, entropy, r0, r1);
@@ -119,7 +116,6 @@ fn main(world: World) -> [] int {
             }
         }
     }
-    release(urandom);
     release(o0);
     release(o1);
     release(clock);

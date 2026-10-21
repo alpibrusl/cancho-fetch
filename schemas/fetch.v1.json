@@ -231,6 +231,12 @@
             "head"
           ]
         },
+        "scheme": {
+          "enum": [
+            "http",
+            "https"
+          ]
+        },
         "host": {
           "type": "string"
         },
@@ -326,6 +332,7 @@
       },
       "required": [
         "method",
+        "scheme",
         "host",
         "path",
         "status",
