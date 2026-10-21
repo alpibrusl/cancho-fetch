@@ -1149,13 +1149,51 @@ pub fn exchange[&h, &k, &p, &a, &l, &m, &o, &y, &t, &u](heap: &!h Heap, clock: &
                     } else if st[0] == mode_none() {
                         st[3] = 1;
                     }
-                    // The rest.
+                    // The rest. A body framed by its length or by the close is read straight into the buffer that holds it, which
+                    // for a known length is made the right size once: copying it through `rd` and growing the buffer by doubling
+                    // was 80 % of the instructions of a 1 MiB response. A chunked body is decoded in place in `rd` and copied.
+                    let direct = st[0] == mode_length() || st[0] == mode_close();
+                    if st[0] == mode_length() && st[3] == 0 {
+                        var whole = st[1] - st[2];
+                        if whole > plan.max_bytes - st[5] {
+                            whole = plan.max_bytes - st[5];
+                        }
+                        body = buffer.reserve(heap, body, whole);
+                    }
                     var live = true;
                     while st[3] == 0 && live {
                         var n = 0;
+                        var cap = 0;
+                        if direct {
+                            if st[0] == mode_length() {
+                                cap = st[1] - st[2];
+                            } else {
+                                cap = plan.max_bytes - st[5] + 1;
+                            }
+                            var want = cap;
+                            if want > 65536 {
+                                want = 65536;
+                            }
+                            body = buffer.reserve(heap, body, want);
+                        }
                         borrow mut c as &!cm in {
                             borrow mut poller as &!pm in {
-                                if secure {
+                                if direct {
+                                    borrow mut body as &!bw in {
+                                        let free = buffer.room(bw);
+                                        var lim = len(free);
+                                        if lim > cap {
+                                            lim = cap;
+                                        }
+                                        if secure {
+                                            borrow mut engine as &!en in {
+                                                n = fetchtls.get(clock, pm, cm, events, en, scratch, cipher, cur, free[0..lim], deadline);
+                                            }
+                                        } else {
+                                            n = fetchtls.read_some(clock, pm, cm, events, free[0..lim], deadline);
+                                        }
+                                    }
+                                } else if secure {
                                     borrow mut engine as &!en in {
                                         n = fetchtls.get(clock, pm, cm, events, en, scratch, cipher, cur, rd, deadline);
                                     }
@@ -1176,6 +1214,19 @@ pub fn exchange[&h, &k, &p, &a, &l, &m, &o, &y, &t, &u](heap: &!h Heap, clock: &
                             live = false;
                             if st[0] != mode_close() {
                                 e = simple_detail(heap, e, "fetch.response-truncated", "the connection closed before the body was complete", "the server closed early; retry", "bytes", st[5]);
+                            }
+                        } else if direct {
+                            borrow mut body as &!bx in {
+                                buffer.filled(bx, n);
+                            }
+                            st[2] = st[2] + n;
+                            st[5] = st[5] + n;
+                            if st[0] == mode_length() && st[2] >= st[1] {
+                                st[3] = 1;
+                            }
+                            if st[5] > plan.max_bytes {
+                                st[4] = 1000;
+                                st[3] = 1;
                             }
                         } else {
                             body = absorb(heap, body, rd, n, st, plan.max_bytes);
@@ -1209,18 +1260,25 @@ pub fn exchange[&h, &k, &p, &a, &l, &m, &o, &y, &t, &u](heap: &!h Heap, clock: &
         clean = fail.count(er) == 0;
     }
     if clean && follow < 0 {
-        buffer.drop(heap, payload);
-        borrow reason as &rb in {
-            borrow shown_headers as &hb in {
-                borrow body as &bb in {
-                    borrow peer_text as &pb in {
-                        payload = data(heap, plan, authority, secure, len(credential) > 0, status_code, rb, hb, bb, pb, millis);
+        if plan.text_mode {
+            // `--format text` writes the body and nothing else: the envelope, whose cost is escaping every byte of the body,
+            // is not built.
+            buffer.drop(heap, shown);
+            shown = body;
+        } else {
+            buffer.drop(heap, payload);
+            borrow reason as &rb in {
+                borrow shown_headers as &hb in {
+                    borrow body as &bb in {
+                        borrow peer_text as &pb in {
+                            payload = data(heap, plan, authority, secure, len(credential) > 0, status_code, rb, hb, bb, pb, millis);
+                        }
                     }
                 }
             }
+            // The envelope holds an escaped copy of the body; the raw one is not needed any more.
+            buffer.drop(heap, body);
         }
-        buffer.drop(heap, shown);
-        shown = body;
     } else {
         buffer.drop(heap, body);
     }
