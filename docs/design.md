@@ -403,11 +403,11 @@ json, 104 ms / 43 MB in text.)
   with curl at 1 MiB, within 1.2 times at 16 MB). Bodies of known length or read-to-close are also read straight into the body
   buffer, reserved up front, instead of through the 8 KiB staging buffer; chunked bodies still go through `absorb`.
 * **In json mode a 16 MB body is five times slower than curl** (76 ms; 35 MB of memory, down from 50 MB). `callgrind`: 301 M
-  instructions, 170 M in the string escaper of `std.json` and 96 M (6 instructions a byte) in a second function that this profile, built without symbol names, does not name (the first, named profile of a 1 MiB body attributed it to a UTF-8 check). `fetch` cannot replace the
+  instructions, 170 M in the string escaper of `std.json` and 96 M (6 instructions a byte) in `toolbox.text.is_ascii`, the byte loop that `text.put` runs over the whole body to decide between a string and a base64 object before `std.json` escapes it (so two passes over every byte: 6 and about 10 instructions). `fetch` cannot replace the
   escaper: the only way to hand `std.json` pre-escaped text is `put_fragment`, which parses and validates what it is given.
   The escaper was made faster in cancho (#589, 15 to about 10 instructions a byte on text with spaces); built with that
   compiler the json 16 MB row measured 81 ms against 76 ms (medians of 7 on a busy machine), inside the run-to-run spread, so
-  the tool stays on its pin (597e6b0) and this row is not claimed to have improved. What is left is the escaper's byte loop and that second function; neither is changed here.
+  the tool stays on its pin (597e6b0) and this row is not claimed to have improved. What is left is those two passes. Unrolling `is_ascii` four bytes at a time measured 0.13 instructions a byte better (not kept); the real saving is one pass instead of two, which needs `std.json` to say whether a string it wrote was pure ASCII (or `text.put` to write the string itself), and is at most a third of the 16 MB json row's CPU. Not made here; it changes a library API for a body size outside what the tool is for.
   The memory is bounded by
   the cap (the ceiling is 16 MiB), but "bounded" is not "small". A body of that size is outside what the tool is for (an
   answer an agent can read), and the cap says so.
