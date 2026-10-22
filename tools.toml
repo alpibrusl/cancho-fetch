@@ -8,12 +8,13 @@
 # given (scripts/manifest.py compares the derived `net_out` labels with them). `ffi` and `net_in` are not, `bounded` must
 # be true, and nothing is written to disk. `clock` is allowed for the deadline, as `run` has it in cancho-tools.
 #
-# `fetch` writes no file and reads none but the entropy for a TLS seed (`seed` below); the trust roots are embedded.
+# `fetch` writes no file and reads none but the entropy for a TLS seed (`seed` below); the trust roots are embedded. `io_read` is
+# standard input, for `--body-stdin` (at most 65536 bytes, read before a socket opens).
 
 max_tools = 1
 
 [fetch]
-allow = ["args", "clock", "conn_read", "conn_write", "err_write", "heap", "io_write", "poll"]
+allow = ["args", "clock", "conn_read", "conn_write", "err_write", "heap", "io_read", "io_write", "poll"]
 net_out = "baked"
 # The TLS seed: `fs_read("/dev/urandom")`, and only when an https:// host is baked (scripts/manifest.py compares). No other
 # file is read: the trust roots are a build input embedded in the binary.

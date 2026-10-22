@@ -15,7 +15,7 @@ and a handshake costs several times OpenSSL's CPU. Do not point it at anything w
 to a bug in an unreviewed TLS stack. The trust roots are a PEM bundle embedded at build time (`--roots`); there is no flag that
 turns verification off.
 
-Not built yet: `--body-stdin` (so the row stays without `io_read`), wildcard hosts for `https`, several credentials for one host,
+Not built yet: wildcard hosts for `https`, several credentials for one host,
 and the shared MCP module (the server is a third copy). The landing page is
 [site/index.html](site/index.html), published with GitHub Pages once Pages is switched to "GitHub Actions" in the settings.
 
@@ -26,7 +26,7 @@ on `PATH`; about three minutes, most of it compiling the TLS packages).
 
 ```
 fetch get  /v1/items --host api.example.com --max-bytes 65536
-fetch post /v1/items --host api.example.com --body-stdin
+fetch post /v1/items --host api.example.com --body-stdin --content-type application/json < body.json
 ```
 
 One binary per allow-list. The hosts are `narrow` literals in the source, so `cancho authority` shows one `net_out` label

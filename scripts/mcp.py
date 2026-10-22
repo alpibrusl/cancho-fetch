@@ -55,7 +55,8 @@ MAX_STDERR = 65536               # the tool's standard error, kept up to this mu
 
 # Flags the server sets: `--root` is the server's (role `root`).
 WITHHELD_ROLES = {"root"}
-WITHHELD_FLAGS = set()
+# `--body-stdin` reads the tool's standard input, which the server has no way to feed: the `body` property is the route.
+WITHHELD_FLAGS = {"--body-stdin"}
 
 
 def introspect(tool, build_dir):
@@ -132,7 +133,12 @@ def definition(d):
     # tell a caller what its input is.
     reads_stdin = "io_read" in d["authority"]["effects"]
     if reads_stdin and not any(o["min"] == 0 and o["max"] == 1 for o in d["operands"]):
-        sys.exit("mcp: %s reads standard input, which this generator does not offer" % name)
+        # Standard input behind a flag the server withholds (`fetch --body-stdin`): the tool has another route for the same bytes, and no
+        # `stdin` property is offered. Any other tool that reads standard input is still refused.
+        if any(f["name"] in WITHHELD_FLAGS and "stdin" in f["name"] for f in d["flags"]):
+            reads_stdin = False
+        else:
+            sys.exit("mcp: %s reads standard input, which this generator does not offer" % name)
     for o in d["operands"]:
         prop = property_of_operand(o["name"])
         if prop in props:
