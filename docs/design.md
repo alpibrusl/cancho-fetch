@@ -300,8 +300,7 @@ and `tests/conformance/test_mcp.py` (10 tests, through the real server and the r
   `capture_both` at the pinned revision is the same source as at cancho's main. `test_output_bound` now asserts the one rule.
 * **Found in `fetch`**: a `;` in a flag's help text splits a row of the flag table, so `introspect` listed garbage flags
   (this showed up only because the generator reads them). Fixed, and `test_introspect_flags_are_well_formed` holds it.
-* **Not built**: the `enum` of baked hosts in the `host` property (needs `introspect` to list the hosts), and a
-  `--with fetch` entry in a combined server.
+* **Built later (8.9)**: the `enum` of baked hosts in the `host` property. **Not built**: a `--with fetch` entry in a combined server.
 
 ## 8.4 Step 5 as built: redirects
 
@@ -462,3 +461,18 @@ Not measured: many requests on one connection (the tool does one), IPv6, a slow 
   operand to replace). `tools/list` has no `stdin` property for `fetch`.
 * **Tests**: a body with a non-ASCII byte arrives whole with the right `Content-Length`; exactly 65,536 passes and 65,537 is
   refused with no request; empty is empty; the three rule cases above.
+
+## 8.9 The hosts in the MCP schema
+
+`tools/list` now gives `host` an `enum` of the build's hosts, so an agent is told what it may name instead of finding out from a
+refusal. **The tool did not change**: the hosts are already in `introspect`'s authority row (`net_out("host:port")`), which
+`scripts/mcp.py` reads when it writes `generated/mcp/tools.cho`. (The first note on this said `introspect` would have to list
+the hosts; it already did, in the row.)
+
+* **Advisory.** The server checks types, not membership; a host outside the list still reaches the tool and is refused there as
+  `fetch.host-not-allowed` with the list in `detail`. A caller that names a baked host without its port where the port is the
+  scheme's default is accepted by the tool and is not in the `enum`; the schema lists the exact entries, which always work.
+* **Per build.** The enum is the hosts baked into the build the server was generated against, so the committed
+  `generated/mcp/tools.cho` carries the two canonical test hosts, and a real deployment regenerates it with its own
+  (`scripts/mcp.py build`), as it already had to for the tool's directory.
+* **Test**: `test_tools_list` compares the enum to the two hosts the MCP tests now build fetch with (the canonical ones, so `mcp.py --check` in `test_generated_files_are_current` compares like with like; the module used to build with the six hosts of the fetch tests, which no longer matches a schema that lists hosts).
