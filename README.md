@@ -5,17 +5,18 @@ authority row (`net_out("api.example.com:443")`) where a reviewer can read it, i
 Written in [cancho](https://github.com/alpibrusl/cancho), following the contract of
 [cancho-tools](https://github.com/alpibrusl/cancho-tools).
 
-**Status: built, not production-ready.** `get`, `head` and `post` over `http` and `https`, redirects to baked hosts only, an MCP
-server, and the authority row derived and gated; 50-odd loopback tests with the pinned compiler (cancho 597e6b0). The design
-and what each step measured are in [docs/design.md](docs/design.md) (sections 8.1 to 8.5).
+**Status: built, not production-ready.** `get`, `head` and `post` over `http` and `https`, redirects to baked hosts only,
+per-host credentials read from files, an MCP server, and the authority row derived and gated; CI runs 60-odd loopback tests with
+the pinned compiler (cancho 597e6b0). The design, what each step measured, and the benchmark against curl are in
+[docs/design.md](docs/design.md) (sections 8.1 to 8.7).
 
 **`https` runs on cancho's pure TLS client, which has not had its independent review** (cancho `docs/ROADMAP.md` #281, #209),
 and a handshake costs several times OpenSSL's CPU. Do not point it at anything whose confidentiality you cannot afford to lose
 to a bug in an unreviewed TLS stack. The trust roots are a PEM bundle embedded at build time (`--roots`); there is no flag that
 turns verification off.
 
-Not built yet: `--body-stdin` (so the row stays without `io_read`), credentials, wildcard hosts for `https`, CI (it needs the
-pinned compiler built and cached), and the shared MCP module (the server is a third copy). The landing page is
+Not built yet: `--body-stdin` (so the row stays without `io_read`), wildcard hosts for `https`, several credentials for one host,
+and the shared MCP module (the server is a third copy). The landing page is
 [site/index.html](site/index.html), published with GitHub Pages once Pages is switched to "GitHub Actions" in the settings.
 
 Building one: `python3 scripts/fetch_build.py --host https://api.example.com --roots roots.pem` (needs the pinned `cancho`
