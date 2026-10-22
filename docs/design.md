@@ -475,4 +475,4 @@ the hosts; it already did, in the row.)
 * **Per build.** The enum is the hosts baked into the build the server was generated against, so the committed
   `generated/mcp/tools.cho` carries the two canonical test hosts, and a real deployment regenerates it with its own
   (`scripts/mcp.py build`), as it already had to for the tool's directory.
-* **Test**: `test_tools_list` compares the enum to the hosts the test build was given.
+* **Test**: `test_tools_list` compares the enum to the two hosts the MCP tests now build fetch with (the canonical ones, so `mcp.py --check` in `test_generated_files_are_current` compares like with like; the module used to build with the six hosts of the fetch tests, which no longer matches a schema that lists hosts).

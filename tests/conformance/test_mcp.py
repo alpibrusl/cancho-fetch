@@ -23,8 +23,13 @@ MCP = None
 def setUpModule():
     global MCP
     tf.ROOTS, tf.CONTEXTS = tf.make_certificates(tf.TMP)
-    fetch = tf.build("mcp-fetch", "--allow-private")
-    shutil.copy(fetch, BIN / "fetch")
+    # The hosts the committed generated files were written for (their schema lists them), so `mcp.py --check` below compares like
+    # with like: the same two as scripts/fetch_build.py's canonical build in generated/fetch.
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "fetch_build.py"), "--host", "http://127.0.0.1:%d" % tf.PORT,
+                        "--host", "http://127.0.0.1:%d" % tf.DEAD, "--allow-private"], cwd=ROOT, capture_output=True, text=True, timeout=600)
+    if r.returncode != 0:
+        raise RuntimeError("build failed:\n" + r.stdout + r.stderr)
+    shutil.copy(ROOT / "build" / "fetch", BIN / "fetch")
     r = subprocess.run([sys.executable, str(ROOT / "scripts" / "mcp.py"), "build", "--bin", str(BIN), "--out", str(BIN / "mcp")],
                        cwd=ROOT, capture_output=True, text=True, timeout=600)
     if r.returncode != 0:
@@ -73,7 +78,7 @@ class Mcp(unittest.TestCase):
         self.assertEqual(schema["properties"]["timeout-ms"]["maximum"], 60000)
         self.assertFalse(schema["additionalProperties"])
         # The hosts of the build are in the schema, from its authority row: the caller is told what it may name.
-        self.assertEqual(schema["properties"]["host"]["enum"], sorted(e.split("://")[1] for e in tf.ENTRIES))
+        self.assertEqual(schema["properties"]["host"]["enum"], ["127.0.0.1:%d" % tf.PORT, "127.0.0.1:%d" % tf.DEAD])
         self.assertNotIn("stdin", schema["properties"])
         self.assertNotIn("root", schema["properties"])
 
