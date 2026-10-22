@@ -402,10 +402,15 @@ json, 104 ms / 43 MB in text.)
   the body as it is. Text mode now skips both: 0.99M instructions, 1 MiB http 7.8 ms to 2.8 ms, 16 MB 104 ms to 16 ms (level
   with curl at 1 MiB, within 1.2 times at 16 MB). Bodies of known length or read-to-close are also read straight into the body
   buffer, reserved up front, instead of through the 8 KiB staging buffer; chunked bodies still go through `absorb`.
-* **In json mode a 16 MB body is five times slower than curl** (76 ms; 35 MB of memory, down from 50 MB). The remaining cost
-  is the escaping inside `std.json`, which `fetch` cannot replace: the only way to hand it pre-escaped text is `put_fragment`,
-  which parses and validates what it is given. The memory is bounded by the cap (the ceiling is 16 MiB), but "bounded" is
-  not "small". A body of that size is outside what the tool is for (an answer an agent can read), and the cap says so.
+* **In json mode a 16 MB body is five times slower than curl** (76 ms; 35 MB of memory, down from 50 MB). `callgrind`: 301 M
+  instructions, 170 M in the string escaper of `std.json` and 96 M (6 instructions a byte) in a second function that this profile, built without symbol names, does not name (the first, named profile of a 1 MiB body attributed it to a UTF-8 check). `fetch` cannot replace the
+  escaper: the only way to hand `std.json` pre-escaped text is `put_fragment`, which parses and validates what it is given.
+  The escaper was made faster in cancho (#589, 15 to about 10 instructions a byte on text with spaces); built with that
+  compiler the json 16 MB row measured 81 ms against 76 ms (medians of 7 on a busy machine), inside the run-to-run spread, so
+  the tool stays on its pin (597e6b0) and this row is not claimed to have improved. What is left is the escaper's byte loop and that second function; neither is changed here.
+  The memory is bounded by
+  the cap (the ceiling is 16 MiB), but "bounded" is not "small". A body of that size is outside what the tool is for (an
+  answer an agent can read), and the cap says so.
 * **TLS costs `fetch` little here**: a handshake adds about 1.5 ms to a 1 KiB request (3.6 ms against 2.0 ms), and about 12 ms of CPU over plain http for 16 MB (text mode).
   The bytes are right (16,000,000 over TLS with the same MD5 as the source). **I cannot explain the 16 MB figure from the engine's
   documented throughput** (`docs/tls-performance.md` in cancho; ChaCha20 at 135 MB/s would cost ~120 ms), and did not profile it.
