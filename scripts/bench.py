@@ -19,6 +19,7 @@ import argparse
 import json
 import os
 import pathlib
+import shutil
 import socket
 import ssl
 import statistics
@@ -33,6 +34,9 @@ sys.path.insert(0, str(ROOT / "tests" / "conformance"))
 HTTP_PORT, TLS_PORT = 18090, 18453
 
 NODELAY = os.environ.get("BENCH_NODELAY", "1") == "1"  # Nagle + delayed ACK on the test server adds ~40 ms to a handshake
+CHAINS = {"ec256": ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1"],
+          "ec384": ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:secp384r1"],
+          "rsa2048": ["-newkey", "rsa:2048"]}
 SIZES = {"1k": 1024, "1m": 1024 * 1024, "16m": 16_000_000}
 
 
@@ -111,11 +115,28 @@ def summarise(samples):
     }
 
 
+def make_chain(where, kind):
+    """One authority and the `good` leaf for localhost, both of key type `kind` (CHAINS); returns the roots file."""
+    def openssl(*args):
+        subprocess.run(["openssl", *args], cwd=where, capture_output=True, text=True, check=True)
+
+    key = CHAINS[kind]
+    openssl("req", "-x509", *key, "-nodes", "-keyout", "ca1.key", "-out", "ca1.pem", "-days", "30", "-subj", "/CN=bench authority",
+            "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign")
+    openssl("req", *key, "-nodes", "-keyout", "good.key", "-out", "good.csr", "-subj", "/CN=localhost")
+    (where / "good.ext").write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\n"
+                                    "extendedKeyUsage=serverAuth\nsubjectAltName=DNS:localhost\n")
+    openssl("x509", "-req", "-in", "good.csr", "-CA", "ca1.pem", "-CAkey", "ca1.key", "-CAcreateserial", "-out", "good.pem",
+            "-days", "30", "-extfile", "good.ext")
+    return str(where / "ca1.pem")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--binary")
     ap.add_argument("--runs", type=int, default=0, help="override the number of runs of every case")
     ap.add_argument("--json")
+    ap.add_argument("--chain", default="ec256", choices=sorted(CHAINS), help="the key type of the test authority and of the server certificate")
     ap.add_argument("--only", help="run only the cases whose scheme/size contains this text, e.g. https/1k")
     a = ap.parse_args()
     global LAUNCHER
@@ -123,7 +144,7 @@ def main():
     LAUNCHER = str(work / "maxrss")
     subprocess.run(["cc", "-O2", "-o", LAUNCHER, str(ROOT / "scripts" / "maxrss.c")], check=True)
     import test_fetch as tf  # the certificate maker of the tests
-    roots, _ = tf.make_certificates(work)
+    roots = make_chain(work, a.chain) if a.chain != "ec256" else tf.make_certificates(work)[0]
     binary = a.binary
     if not binary:
         r = subprocess.run([sys.executable, str(ROOT / "scripts" / "fetch_build.py"),

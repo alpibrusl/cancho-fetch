@@ -402,14 +402,30 @@ harness, not the tools). Times are wall milliseconds, memory the peak resident s
 * **TLS costs `fetch` little here**: a handshake adds about 1.5 ms to a 1 KiB request (3.4 ms against 1.9 ms), and about 13 ms of CPU over plain http for 16 MB.
   The bytes are right (16,000,000 over TLS with the same MD5 as the source). **I cannot explain the 16 MB figure from the engine's
   documented throughput** (`docs/tls-performance.md` in cancho; ChaCha20 at 135 MB/s would cost ~120 ms), and did not profile it.
-  The certificates are P-256 ECDSA, the cheap case for the engine's anchor tables; an RSA or P-384 chain, which most public sites
-  serve, was not measured. The ROADMAP's "4 to 7 times OpenSSL's CPU for a handshake" is therefore neither confirmed nor
-  contradicted by this benchmark: a whole process is 3 ms against 9 ms because curl's start-up dwarfs both handshakes.
+  The tables above use P-256 ECDSA certificates. `bench.py --chain rsa2048|ec384` measures the other two (an authority and a
+  server certificate of that key type; one run each, a loaded shared machine, so read them as orders of magnitude):
+
+  | https, 1 KiB | curl | fetch |
+  |---|---|---|
+  | P-256 ECDSA | 9.2 ms | 3.6 ms |
+  | RSA-2048 | 10.1 ms | **3.3 ms** |
+  | P-384 ECDSA | 12.2 ms | **5.6 ms** |
+
+  So the handshake does not get dear with RSA-2048 (verifying a signature with a public exponent of 65537 is cheap) and P-384
+  adds about 2 ms; `fetch` stays about two to three times faster than curl for a small request on all three. The 1 MiB rows of
+  these runs (RSA 11.0 ms, P-384 14.7 ms for `fetch` text) are slower than the P-256 table's 5.0 ms by more than the 1 KiB
+  rows are, which a handshake cannot explain; the machine was busier (curl's own 1 MiB row moved from 12.7 to 10.5 and 12.3
+  ms), and I did not repeat them. A chain with an intermediate, which public sites serve, was not measured. The ROADMAP's "4 to 7
+  times OpenSSL's CPU for a handshake" is therefore neither confirmed nor contradicted by this benchmark: a whole process is
+  3 ms against 9 ms because curl's start-up dwarfs both handshakes.
 * **What the benchmark found in `fetch`**: a trap (SIGILL) on any response whose first read held more than 8 KiB of body, which
   failed every 1 MiB and 16 MB run of the first attempt (8.1 fixed it and `test_a_body_larger_than_the_first_read_buffers`
   holds it). No earlier test had a body over 100 KB.
 * **What the benchmark found in the benchmark**: the 45 ms that every https request seemed to cost was the test server's
   Nagle/delayed-ACK interaction (it is gone with `TCP_NODELAY`; `BENCH_NODELAY=0` brings it back), identical for both tools.
+
+Chunked bodies were measured once against a 16 MB body of the same bytes (4 KiB and 64 KiB chunks, text mode, http): 26 to 30 ms of CPU
+against 22 ms for the same body with a Content-Length, so chunk decoding costs about 0.3 ns a byte and needs no fast path.
 
 Not measured: many requests on one connection (the tool does one), IPv6, a slow or distant server, a server that answers with
 `Content-Encoding` (the tool asks for `identity`), and anything on a machine that is not this one.
