@@ -293,10 +293,12 @@ and `tests/conformance/test_mcp.py` (10 tests, through the real server and the r
   two tools (`fetch_get`, `fetch_post`), which the generator does not do; not built.
 * **The server's own row** has no `net_out`, `net_in`, `ffi` or file label, only `exec` narrowed to the binary directory
   (checked by a test): the network authority stays in the tool, whose row lists the hosts.
-* **Found: the MCP server's output bound is racy.** The same call (a 100,000-byte body, `--max-output 2000`) ends as
-  `mcp.output-too-large` in about half the runs and as `mcp.signaled` in the rest: the tool is ended by a signal before
-  the server's verdict is set. It is in the copied server or `std.process.capture_both`, not in `fetch`; I have not run
-  cancho-table's server against it to see whether it shows there too. The test accepts either rule and says why. Open.
+* **Found: the MCP server's output bound ended as `mcp.signaled` as often as `mcp.output-too-large`.** The same call (a
+  100,000-byte body, `--max-output 2000`). **This note first blamed the copied server or `std.process.capture_both`; that was
+  wrong, and is corrected here.** It was `fetch` itself: the SIGILL trap on a response whose first read held more than 8 KiB
+  of body (8.7), which the server saw as "the tool was ended by a signal". Measured later, 40 runs each on this machine: the
+  build before that fix answers `mcp.signaled` 40 times, the current build `mcp.output-too-large` 40 times, and
+  `capture_both` at the pinned revision is the same source as at cancho's main. `test_output_bound` now asserts the one rule.
 * **Found in `fetch`**: a `;` in a flag's help text splits a row of the flag table, so `introspect` listed garbage flags
   (this showed up only because the generator reads them). Fixed, and `test_introspect_flags_are_well_formed` holds it.
 * **Not built**: the `enum` of baked hosts in the `host` property (needs `introspect` to list the hosts), and a

@@ -117,10 +117,9 @@ class Mcp(unittest.TestCase):
         self.serve(lambda req: tf.ok(b"z" * 100000))
         a = call({"host": self.host(), "method": "get", "path": "/"}, flags=("--max-output", "2000"))
         self.assertTrue(a["result"]["isError"])
-        # Nondeterministic, found while writing this: the same call ends as mcp.output-too-large or mcp.signaled (the
-        # tool is ended by a signal before the server has set its verdict). It is in the copied server / std.process,
-        # not in fetch; docs/design.md 8.3 records it. Either way the tool is stopped and the call is an error.
-        self.assertIn(server_rule(a), ("mcp.output-too-large", "mcp.signaled"))
+        # It once ended as mcp.signaled in about half the runs: the tool trapped on a first read of more than 8 KiB of body
+        # (docs/design.md 8.3, 8.7), not the server. One rule now.
+        self.assertEqual(server_rule(a), "mcp.output-too-large")
 
     def test_header_injection_cannot_pass_through_the_server(self):
         s = self.serve(lambda req: tf.ok())
