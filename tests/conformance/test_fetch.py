@@ -170,11 +170,12 @@ def ok(body=b"hi there\n", headers=b"Content-Type: text/plain\r\n"):
     return b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n%s\r\n%s" % (len(body), headers, body)
 
 
-def run(binary, *args, timeout=30, chosen=True):
-    """Two hosts are baked, so --host is required; the tests that are not about that choose the first."""
+def run(binary, *args, timeout=30, chosen=True, stdin=None):
+    """Two hosts are baked, so --host is required; the tests that are not about that choose the first. `stdin` is the text on
+    standard input (none: the test runner's own, which a test of a tool that reads it must not rely on, so it is empty)."""
     if chosen and "--host" not in args and "introspect" not in args:
         args = ("--host", "127.0.0.1:%d" % PORT, *args)
-    r = subprocess.run([binary, *args], capture_output=True, text=True, timeout=timeout)
+    r = subprocess.run([binary, *args], capture_output=True, text=True, timeout=timeout, input="" if stdin is None else stdin)
     return r.returncode, (json.loads(r.stdout) if r.stdout.startswith("{") else r.stdout), r.stderr
 
 
@@ -340,6 +341,36 @@ class Fetch(unittest.TestCase):
         self.assertIn(b"Content-Length: 7\r\n", req)
         self.assertIn(b"Content-Type: application/json\r\n", req)
         self.assertTrue(req.endswith(b"\r\n\r\n" + b'{"a":1}'), req)
+
+    def test_post_body_from_standard_input(self):
+        s = self.serve(lambda req: b"HTTP/1.1 201 Created\r\nContent-Length: 2\r\n\r\nok")
+        body = '{"name":"caf\u00e9","n":[1,2,3]}\n'
+        rc, doc, _ = run(OPEN, "--body-stdin", "--content-type", "application/json", "post", "/items", stdin=body)
+        self.assertEqual((rc, doc["data"]["status"], doc["data"]["method"]), (0, 201, "post"), doc)
+        req = s.requests[0]
+        self.assertIn(b"Content-Length: %d\r\n" % len(body.encode()), req)
+        self.assertTrue(req.endswith(b"\r\n\r\n" + body.encode()), req)
+
+    def test_standard_input_body_is_bounded_and_may_be_empty(self):
+        s = self.serve(lambda req: ok())
+        rc, doc, _ = run(OPEN, "--body-stdin", "--content-type", "text/plain", "post", "/", stdin="x" * 65536)
+        self.assertEqual(rc, 0, doc)
+        self.assertEqual(len(s.requests), 1)
+        self.assertTrue(s.requests[0].endswith(b"x" * 65536))
+        rc, doc, _ = run(OPEN, "--body-stdin", "--content-type", "text/plain", "post", "/", stdin="")
+        self.assertEqual(rc, 0, doc)
+        self.assertIn(b"Content-Length: 0\r\n", s.requests[1])
+        rc, doc, _ = run(OPEN, "--body-stdin", "--content-type", "text/plain", "post", "/", stdin="x" * 65537)
+        self.assertEqual((rc, self.rule(doc)), (2, "fetch.request-body-too-large"))
+        self.assertEqual(len(s.requests), 2)
+
+    def test_standard_input_body_rules(self):
+        s = self.serve(lambda req: ok())
+        self.assertEqual(self.rule(run(OPEN, "--body", "a", "--body-stdin", "--content-type", "text/plain", "post", "/", stdin="b")[1]), "args.conflict")
+        self.assertEqual(self.rule(run(OPEN, "--body-stdin", "post", "/", stdin="b")[1]), "fetch.body-required")
+        for m in ("get", "head"):
+            self.assertEqual(self.rule(run(OPEN, "--body-stdin", "--content-type", "text/plain", m, "/", stdin="b")[1]), "fetch.body-not-allowed")
+        self.assertEqual(s.requests, [])
 
     def test_post_is_one_request_with_the_whole_body(self):
         s = self.serve(lambda req: ok())
@@ -628,7 +659,7 @@ class Fetch(unittest.TestCase):
         """A `;` in a help text splits a row of the flag table: the flags then list garbage (found by the MCP generator)."""
         rc, doc, _ = run(STRICT, "introspect")
         names = [f["name"] for f in doc["flags"]]
-        self.assertEqual(names, ["--host", "--max-bytes", "--timeout-ms", "--accept", "--body", "--content-type", "--max-redirects", "--format"])
+        self.assertEqual(names, ["--host", "--max-bytes", "--timeout-ms", "--accept", "--body", "--body-stdin", "--content-type", "--max-redirects", "--format"])
         for f in doc["flags"]:
             self.assertIn(f["kind"].split(":")[0], ("text", "nat", "choice", "bool"), f)
             self.assertTrue(f["help"], f)

@@ -262,10 +262,9 @@ manifest gate. `tests/conformance/test_fetch.py` runs two builds against loopbac
 
 `fetch post PATH --body TEXT --content-type TYPE`. Decisions, each with its reason:
 
-* **`--body` only; `--body-stdin` is not built.** Reading standard input would add `io_read` to the authority row for
-  a convenience; an argument carries the request bodies an agent writes (JSON, a form), up to **65,536 bytes**
-  (`fetch.request-body-too-large` beyond), and the row stays as it was. A body from stdin is a later step if a caller needs
-  one over 64 KiB, and the row will say so when it does.
+* **`--body`, and later `--body-stdin`.** `--body` carries the request bodies an agent writes (JSON, a form), up to **65,536 bytes**
+  (`fetch.request-body-too-large` beyond). `--body-stdin` was added afterwards (8.8) for a caller that does not want to quote a
+  body into one argument; the cost was `io_read` in every build's authority row, which this section first refused to pay.
 * **`--content-type` is required with `--body`** (`fetch.body-required` names both). A default type would be a guess that
   is right for one server and silently wrong for the next; the error's hint gives an example, which is what a caller
   needs to repair it.
@@ -444,3 +443,22 @@ against 22 ms for the same body with a Content-Length, so chunk decoding costs a
 Not measured: many requests on one connection (the tool does one), IPv6, a slow or distant server, a server that answers with
 `Content-Encoding` (the tool asks for `identity`), and anything on a machine that is not this one.
 
+## 8.8 `--body-stdin`
+
+`fetch post PATH --body-stdin --content-type TYPE < body`. Decisions:
+
+* **The authority row gains `io_read`** (standard input), for every build: the row is derived from the code and the code can read
+  it, so the row says so (`tools.toml` allows it with a comment; `introspect` says `stdin: "with --body-stdin"`). Nothing else
+  changed in the row: still no file, no `net_in`, no `ffi`, and the hosts are the same.
+* **Same ceiling as `--body`: 65,536 bytes.** One byte more is read to tell "exactly the ceiling" from "more"; more is
+  `fetch.request-body-too-large` (flag `--body-stdin`) and no socket is opened. An empty standard input is an empty body
+  (`Content-Length: 0`), as `--body ""` is.
+* **Read before any socket opens**, so a refusal costs the network nothing and a slow writer on standard input is not under the
+  request's deadline. (A caller that never closes standard input blocks the tool; the caller owns that pipe.)
+* **`--body` and `--body-stdin` together are `args.conflict`**; `--body-stdin` with `get` or `head` is `fetch.body-not-allowed`,
+  and without `--content-type` `fetch.body-required`, as for `--body`.
+* **The MCP server does not offer it.** It has no way to feed the tool's standard input and the `body` property carries the same
+  bytes, so `scripts/mcp.py` withholds the flag (and, as before, still refuses any other tool that reads standard input without an
+  operand to replace). `tools/list` has no `stdin` property for `fetch`.
+* **Tests**: a body with a non-ASCII byte arrives whole with the right `Content-Length`; exactly 65,536 passes and 65,537 is
+  refused with no request; empty is empty; the three rule cases above.

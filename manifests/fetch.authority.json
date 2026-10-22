@@ -8,6 +8,7 @@
     "conn_write",
     "err_write",
     "heap",
+    "io_read",
     "io_write",
     "net_out",
     "poll"
@@ -40,6 +41,11 @@
     },
     {
       "name": "heap",
+      "argument": null,
+      "bounded": true
+    },
+    {
+      "name": "io_read",
       "argument": null,
       "bounded": true
     },
@@ -1162,5 +1168,5 @@
   ],
   "folded_operators": 138,
   "folded_calls": 774,
-  "functions": 1685
+  "functions": 1686
 }

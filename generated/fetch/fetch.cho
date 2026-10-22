@@ -48,12 +48,13 @@ fn via_1[&h, &k, &o, &p, &y](heap: &!h Heap, clock: &k Clock, out: &o Out("127.0
     }
 }
 
-fn run[&h, &g, &i, &k, &z, &q0, &q1](heap: &!h Heap, args: &g Args, io: &!i Io, clock: &k Clock, entropy: &z [byte], o0: &q0 Out("127.0.0.1:18080"), o1: &q1 Out("127.0.0.1:18081")) -> [heap, args, io_write, err_write, clock, poll, net_out("127.0.0.1:18080"), net_out("127.0.0.1:18081")] int {
+fn run[&h, &g, &i, &k, &z, &q0, &q1](heap: &!h Heap, args: &g Args, io: &!i Io, clock: &k Clock, entropy: &z [byte], o0: &q0 Out("127.0.0.1:18080"), o1: &q1 Out("127.0.0.1:18081")) -> [heap, args, io_read, io_write, err_write, clock, poll, net_out("127.0.0.1:18080"), net_out("127.0.0.1:18081")] int {
     let which = cli.subcommand(args);
     if which != 0 {
         return describe.answer(heap, io, which, fetchcore.tool(), fetchcore.built());
     }
     var plan = fetchcore.plan(heap, args, hosts());
+    plan = fetchcore.take_stdin(heap, io, plan);
     var refused = false;
     borrow plan as &r in {
         refused = fetchcore.refused(r);
