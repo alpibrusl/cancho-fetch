@@ -127,6 +127,13 @@ def definition(d):
         prop = f["name"][2:]
         props[prop] = schema_of_flag(f, ceiling)
         flags.append((prop, f["name"], "bool" if f["kind"] == "bool" else "nat" if f["kind"] == "nat" else "text"))
+    # The hosts this build was given are in its authority row (`net_out("host:port")`), so a caller can be told them in the schema: an `enum`
+    # on `host`, which is advisory (the server checks types, the tool refuses any other host as fetch.host-not-allowed). Nothing in the tool
+    # changed for this.
+    allowed = sorted(l["argument"] for l in d["authority"].get("labels", []) if l["name"] == "net_out" and l.get("argument"))
+    if allowed and "host" in props and props["host"].get("type") == "string":
+        props["host"]["enum"] = allowed
+        props["host"]["description"] += " This build's hosts are the enumerated values."
     # A tool that reads standard input when its operand is absent or `-` (table, docs/readers.md section 3): the server offers it a `stdin` property, the text
     # it writes to the pipe that is the child's standard input (docs/mcp.md section 12), and a call gives exactly one of the operand and `stdin`, which the
     # server checks, so neither is `required` in the schema. A tool that reads standard input and has no such operand is still refused: nothing here would

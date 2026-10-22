@@ -72,6 +72,8 @@ class Mcp(unittest.TestCase):
         self.assertEqual(schema["properties"]["max-bytes"]["maximum"], 16777216)
         self.assertEqual(schema["properties"]["timeout-ms"]["maximum"], 60000)
         self.assertFalse(schema["additionalProperties"])
+        # The hosts of the build are in the schema, from its authority row: the caller is told what it may name.
+        self.assertEqual(schema["properties"]["host"]["enum"], sorted(e.split("://")[1] for e in tf.ENTRIES))
         self.assertNotIn("stdin", schema["properties"])
         self.assertNotIn("root", schema["properties"])
 
