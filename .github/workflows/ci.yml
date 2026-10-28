@@ -115,3 +115,22 @@ jobs:
         run: echo "$PWD/cancho-bin" >> "$GITHUB_PATH"
       - name: The suite (a build of the tool and of the server, then the tests)
         run: python3 -m unittest -v tests/conformance/test_mcp.py
+
+  site:
+    name: the landing page is what a built fetch prints
+    needs: compiler
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: cancho-bin
+          key: cancho-compiler-${{ runner.os }}-${{ needs.compiler.outputs.rev }}
+          fail-on-cache-miss: true
+      - name: Put the compiler on PATH
+        run: echo "$PWD/cancho-bin" >> "$GITHUB_PATH"
+      - name: site/index.html and site/demo.js are what a fetch built for one loopback host prints
+        run: python3 scripts/site_demo.py --build --check
+      - name: The build left generated/ and manifests/ as committed
+        run: git diff --exit-code

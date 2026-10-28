@@ -118,8 +118,8 @@ def source(entries, allow_private, roots_pem, credentials=None):
     w("    var status = 0;\n    if refused {\n        borrow plan as &p in {\n            status = fetchcore.refuse(heap, io, p);\n        }\n        fetchcore.drop_plan(heap, plan);\n        return status;\n    }")
     w("    var answer = fetchcore.nothing(heap);\n    var finished = false;\n    while !finished {\n        borrow plan as &p in {\n            let pick = fetchcore.host_of(p);")
     for i in range(n):
-        if i == n - 1:
-            w("            %s{" % ("} else " if n > 1 else ""))
+        if i == n - 1 and n > 1:
+            w("            } else {")
         elif i == 0:
             w("            if pick == 0 {")
         else:
