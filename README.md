@@ -7,7 +7,7 @@ Written in [cancho](https://github.com/alpibrusl/cancho), following the contract
 
 **Status: alpha prerelease. Built and tested, not production-ready.** `get`, `head` and `post` over `http` and `https`, redirects to baked hosts only,
 per-host credentials read from files, an MCP server, and the authority row derived and gated; CI runs 60-odd loopback tests with
-the pinned compiler (cancho 597e6b0). The design, what each step measured, and the benchmark against curl are in
+the pinned compiler (cancho 107c0e7, cancho main when it was bumped; the measurements in docs/design.md were made at 597e6b0). The design, what each step measured, and the benchmark against curl are in
 [docs/design.md](docs/design.md) (sections 8.1 to 8.7).
 
 **`https` runs on cancho's pure TLS client, which has not had its independent review** (cancho `docs/ROADMAP.md` #281, #209),
