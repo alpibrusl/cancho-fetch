@@ -1,6 +1,6 @@
 name: pages
 
-# The landing page is a single hand-written file, `site/index.html`, published as it is.
+# The landing page is `site/index.html`, written by scripts/site_demo.py from what a built fetch prints (CI checks it), with its video recorded by scripts/record_demo.py; `site/` is published as it is.
 # Switch Pages to "GitHub Actions" in the repository settings once; this workflow does the rest.
 
 on:

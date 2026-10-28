@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en" class="nojs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cancho-fetch: an HTTP client whose hosts are in the binary</title>
+<meta name="description" content="An agent-safe HTTP(S) client written in cancho. The hosts it may reach are literals in the binary and one net_out label each in its authority row. Alpha prerelease.">
+<link rel="stylesheet" href="landing.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to the content</a>
+<div class="alpha" role="note"><div class="wrap"><b>Alpha prerelease</b><span>Built and tested, not production-ready. https runs on a TLS client that has not had an independent review. <a href="#alpha">What that means</a></span></div></div>
+<header class="top"><div class="wrap">
+  <a class="brand" href="#">cancho-fetch</a>
+  <nav aria-label="Sections">
+    <a href="#demo">Demo</a><a href="#audience-section">Humans and agents</a><a class="opt" href="#alpha">Alpha</a><a class="opt" href="#numbers">Numbers</a>
+    <a href="https://github.com/alpibrusl/cancho-fetch">GitHub</a>
+  </nav>
+</div></header>
+
+<main id="main">
+<section class="hero"><div class="wrap">
+  <div>
+    <p class="eyebrow">cancho-fetch · alpha prerelease</p>
+    <h1>An HTTP client whose hosts are in the binary.</h1>
+    <p class="sub">Give an agent <code>curl</code> and it can reach any host, with any header, and follow any redirect. <code>fetch</code> can dial only the hosts its builder wrote into it, and says so in its authority row, where a reviewer can read it without running anything.</p>
+    <div class="cta"><a class="btn primary" href="#demo">Watch a real session</a><a class="btn" href="https://github.com/alpibrusl/cancho-fetch">Source</a></div>
+    <div class="pills"><span>EUPL-1.2</span><span>one binary per allow-list</span><span>redirects off by default</span><span>no verify-off flag</span></div>
+  </div>
+  <svg viewBox="0 0 260 180" role="img" aria-label="A request leaves fetch for one host in a list and is refused for another" class="net" style="max-width:20rem;margin:0 auto">
+    <rect class="gate" x="10" y="62" width="76" height="56" rx="10"/><text x="48" y="95" text-anchor="middle">fetch</text>
+    <rect class="node ok" x="170" y="14" width="80" height="34" rx="8"/><text x="210" y="36" text-anchor="middle">api</text>
+    <rect class="node" x="170" y="73" width="80" height="34" rx="8"/><text class="m" x="210" y="95" text-anchor="middle">other</text>
+    <rect class="node" x="170" y="132" width="80" height="34" rx="8"/><text class="m" x="210" y="154" text-anchor="middle">anywhere</text>
+    <path class="edge ok" d="M86 82 C130 82 130 31 170 31"/>
+    <path class="edge" d="M86 90 L170 90"/><path class="edge" d="M86 98 C130 98 130 149 170 149"/>
+  </svg>
+</div></section>
+
+<section id="demo" class="alt"><div class="wrap">
+  <h2>What it does when it is wrong</h2>
+  <p class="lead">This is the real output of a <code>fetch</code> built for one host, <code>{{BAKED}}</code>, answering a server on this machine. The page's generator ran the commands and checks that every line below is what they printed.</p>
+  <div class="demo" id="demo-stage">
+    <div class="term" aria-label="A terminal replaying a real fetch session">
+      <div class="bar"><i></i><i></i><i></i><span>fetch</span><button id="replay" type="button">Replay</button></div>
+      <pre id="screen" aria-live="off"></pre>
+    </div>
+    <div class="stage">
+      <h3>Where the request may go</h3>
+      <svg class="net" viewBox="0 0 400 270" role="img" aria-label="fetch and the three places a request tried to go">
+        <rect class="gate" x="12" y="96" width="92" height="64" rx="10"/><text x="58" y="124" text-anchor="middle">fetch</text><text class="m" x="58" y="143" text-anchor="middle">1 host baked</text>
+        <path id="e-api" class="edge" d="M104 118 C170 118 170 40 236 40"/><path id="e-other" class="edge" d="M104 128 L236 128"/><path id="e-evil" class="edge" d="M104 138 C170 138 170 216 236 216"/>
+        <rect id="n-api" class="node" x="236" y="14" width="150" height="52" rx="9"/><text x="311" y="36" text-anchor="middle">api</text><text id="s-api" class="stamp" x="311" y="55" text-anchor="middle"></text>
+        <rect id="n-other" class="node" x="236" y="102" width="150" height="52" rx="9"/><text x="311" y="124" text-anchor="middle">another port</text><text id="s-other" class="stamp" x="311" y="143" text-anchor="middle"></text>
+        <rect id="n-evil" class="node" x="236" y="190" width="150" height="52" rx="9"/><text x="311" y="212" text-anchor="middle">redirect target</text><text id="s-evil" class="stamp" x="311" y="231" text-anchor="middle"></text>
+        <text id="l-api" class="edge-label m" x="150" y="60" text-anchor="middle"></text><text id="l-other" class="edge-label m" x="170" y="120" text-anchor="middle"></text><text id="l-evil" class="edge-label m" x="150" y="200" text-anchor="middle"></text>
+      </svg>
+      <div id="verdict" class="verdict" aria-live="polite"></div>
+    </div>
+  </div>
+  <div class="vid">
+    <video controls preload="none" poster="demo.poster.jpg" aria-label="The same session as a video">
+      <source src="demo.mp4" type="video/mp4"><source src="demo.webm" type="video/webm">
+    </video>
+    <p class="caption">The same session as a video. Nothing in it is mocked: the server is a few lines of Python on loopback.</p>
+  </div>
+</div></section>
+
+<section id="audience-section"><div class="wrap">
+  <h2>One binary, two readers</h2>
+  <p class="lead">A person reads the host list. An agent reads a refusal and fixes the call.</p>
+  <div class="segwrap"><div class="seg" id="audience" role="tablist" aria-label="Audience">
+    <button type="button" role="tab" data-panel="humans" aria-selected="true">For humans</button>
+    <button type="button" role="tab" data-panel="agents" aria-selected="false">For agents</button>
+  </div></div>
+
+  <div id="humans" class="panel on">
+    <div class="cards">
+      <div class="card"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h10"/></svg><h3>Read the list, not the code</h3><p><code>fetch introspect</code> prints one <code>net_out</code> label per host. The same list is what the run-time check compares against. The label is: <code>{{LABEL}}</code></p></div>
+      <div class="card"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><h3>Secrets stay in files</h3><p>A credential is a path given at build time (<code>--credential HOST=PATH</code>), read when needed and sent only to that host. It is never an argument, so it is never in a transcript.</p></div>
+      <div class="card"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M5 8h14M5 16h14"/></svg><h3>Bounded</h3><p>A body cap, a timeout, no redirects unless asked, and a refusal to dial a private address unless the builder allowed it. Each is a refusal with a rule, not a hang.</p></div>
+    </div>
+    <pre class="code"><span class="d"># one binary per allow-list; about three minutes, mostly the TLS packages</span>
+python3 scripts/fetch_build.py --host https://api.example.com
+build/fetch get /v1/items --host api.example.com:443</pre>
+  </div>
+
+  <div id="agents" class="panel">
+    <div class="diagram"><svg viewBox="0 0 640 130" role="img" aria-label="argv goes into fetch, JSON or a refusal comes out, with an exit status">
+      <rect class="box k" x="10" y="35" width="150" height="60" rx="10"/><text x="85" y="62" text-anchor="middle">argv</text><text class="m" x="85" y="80" text-anchor="middle">get PATH --host H</text>
+      <path class="arrow" d="M160 65 H240"/><path class="head" d="M240 59 L252 65 L240 71Z"/>
+      <rect class="box k" x="252" y="35" width="136" height="60" rx="10"/><text x="320" y="62" text-anchor="middle">fetch</text><text class="m" x="320" y="80" text-anchor="middle">hosts in the row</text>
+      <path class="arrow" d="M388 52 H468"/><path class="head" d="M468 46 L480 52 L468 58Z"/>
+      <path class="arrow r" d="M388 80 H468"/><path class="head r" d="M468 74 L480 80 L468 86Z"/>
+      <rect class="box k" x="480" y="20" width="150" height="40" rx="10"/><text x="555" y="44" text-anchor="middle">data · exit 0</text>
+      <rect class="box r" x="480" y="70" width="150" height="40" rx="10"/><text x="555" y="94" text-anchor="middle">error · exit 2, 8</text>
+    </svg></div>
+    <div class="twocol">
+      <div>
+        <p style="margin-top:0">Every answer is one JSON object on stdout. A refusal names a <code>rule</code>, says what is allowed and says how to repair the call. This one is the real thing, from the demo above:</p>
+        <pre class="code" style="margin-top:.6rem;white-space:pre-wrap;overflow-wrap:anywhere">{{REFUSAL}}</pre>
+        <p class="fine" style="text-align:left;margin-left:0">Discover the rest without reading a manual: <code>fetch introspect</code> (commands, rules, the authority row), <code>fetch skill</code> (a skill file for the agent) and an MCP server mode. Exit status: 0 answered, 2 refused, 8 a body over the cap.</p>
+      </div>
+      <div class="promptbox"><div class="pbar"><span>Prompt for your agent</span><button id="copyprompt" type="button">Copy</button></div><pre id="agentprompt">{{PROMPT}}</pre></div>
+    </div>
+  </div>
+</div></section>
+
+<section id="alpha" class="alt"><div class="wrap">
+  <h2>What alpha means here</h2>
+  <p class="lead">It is built and tested. It is not ready to be the only thing between an agent and the network.</p>
+  <div class="three">
+    <div class="card"><h3><span class="dotk"></span>Built and tested</h3><ul><li><code>get</code>, <code>head</code> and <code>post</code> over http and https</li><li>baked hosts, one <code>net_out</code> label each</li><li>body cap, timeout, redirects off by default and only ever to baked hosts</li><li>refusal to dial private addresses unless allowed</li><li>credentials from files, sent to their own host only</li><li>CLI, <code>introspect</code>, <code>skill</code>, MCP</li></ul></div>
+    <div class="card"><h3><span class="dotk w"></span>Not built yet</h3><ul><li>wildcard hosts for https</li><li>several credentials for one host</li><li>a shared MCP module with the sibling tools</li><li>ALPN and session resumption</li></ul></div>
+    <div class="card"><h3><span class="dotk x"></span>Not planned</h3><ul><li>ssh and other HTTP methods</li><li>proxies and cookies</li><li>HTTP/2 and client certificates</li></ul></div>
+  </div>
+  <div class="callout">
+    <h3>TLS, said plainly</h3>
+    <p>https runs on cancho's own TLS client, written in cancho. It has not had an independent security review (tracked in cancho issues #209 and #281). A handshake costs several times the CPU of OpenSSL's.</p>
+    <p>The trust roots are a PEM bundle the builder passes with <code>--roots</code>; they are embedded at build time. No flag turns certificate verification off.</p>
+    <p>Until that review exists, treat https here as unreviewed, and prefer http on a trusted network or a reviewed proxy for anything that matters.</p>
+  </div>
+</div></section>
+
+<section id="numbers"><div class="wrap">
+  <h2>Measured, not promised</h2>
+  <p class="lead">One process per request, medians, against curl 8.5.0 with OpenSSL 3.0.13 (<a href="https://github.com/alpibrusl/cancho-fetch/blob/main/docs/design.md">design.md §8.7</a>). Small requests are faster; a 16 MB body is not.</p>
+  <div class="bars reveal">{{BARS}}</div>
+  <p class="fine">Each figure on this page is checked against that section when the page is built.</p>
+</div></section>
+</main>
+
+<footer><div class="wrap">
+  <p>cancho-fetch is <a href="https://github.com/alpibrusl/cancho-fetch/blob/main/LICENSE">EUPL-1.2</a>, Copyright (c) 2026 Alpibru S.L. · alpha prerelease</p>
+  <p><a href="https://github.com/alpibrusl/cancho">cancho</a> · <a href="https://github.com/alpibrusl/cancho-tools">cancho-tools</a> · <a href="https://github.com/alpibrusl/cancho-fetch">cancho-fetch</a></p>
+</div></footer>
+<script src="demo.js"></script>
+<script src="landing.js"></script>
+</body>
+</html>
