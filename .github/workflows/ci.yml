@@ -2,7 +2,8 @@ name: ci
 
 # The tool is built with the compiler its cancho.toml pins (`[package] cancho`), not with whatever is newest: the sources were
 # written for that revision, and the authority manifests are derived by it (a newer compiler's report may differ in format).
-# Building that compiler takes minutes, so it is built once per pin and cached; every job restores it.
+# The compiler is the prebuilt release for that revision (built by cancho, sha256-checked by install.sh), fetched once per pin and cached;
+# every job restores it. No Rust toolchain is involved.
 #
 # A branch with a pull request is built by the pull request; main is built on push.
 on:
@@ -41,18 +42,13 @@ jobs:
           path: cancho-bin
           key: cancho-compiler-${{ runner.os }}-${{ steps.pin.outputs.rev }}
 
-      - name: Build it (only when it is not cached)
+      - name: Install it (only when it is not cached): the release of that revision, built by cancho
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          git clone --filter=blob:none https://github.com/alpibrusl/cancho cancho-src
-          git -C cancho-src checkout "${{ steps.pin.outputs.rev }}"
-          cd cancho-src
-          # the repository pins its Rust toolchain (rust-toolchain.toml); make sure it is there
-          rustup toolchain install || true
-          rustup show
-          scripts/install.sh "$(git rev-parse HEAD)" "$RUNNER_TEMP/cancho-release" && mkdir -p target/release && cp "$RUNNER_TEMP/cancho-release/bin/cancho" target/release/cancho
-          mkdir -p ../cancho-bin
-          cp target/release/cancho ../cancho-bin/cancho
+          curl -fsSL https://raw.githubusercontent.com/alpibrusl/cancho/main/scripts/install.sh -o install.sh
+          sh install.sh "${{ steps.pin.outputs.rev }}" "$RUNNER_TEMP/cancho-release"
+          mkdir -p cancho-bin
+          cp "$RUNNER_TEMP/cancho-release/bin/cancho" cancho-bin/cancho
 
       - name: It runs
         run: ./cancho-bin/cancho --version || ./cancho-bin/cancho 2>&1 | head -3
