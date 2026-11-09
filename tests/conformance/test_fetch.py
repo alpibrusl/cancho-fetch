@@ -329,7 +329,8 @@ class Fetch(unittest.TestCase):
         s = self.serve(lambda req: ok())
         self.assertEqual(self.rule(run(OPEN, "get", "/a b")[1]), "fetch.path-malformed")
         self.assertEqual(self.rule(run(OPEN, "get", "relative")[1]), "fetch.path-malformed")
-        self.assertEqual(self.rule(run(OPEN, "put", "/")[1]), "fetch.method")
+        for m in ("options", "trace", "connect", "PUT", "Delete"):
+            self.assertEqual(self.rule(run(OPEN, m, "/")[1]), "fetch.method", m)
         self.assertEqual(s.requests, [])
 
     def test_post(self):
@@ -380,6 +381,61 @@ class Fetch(unittest.TestCase):
         self.assertEqual(len(s.requests), 1)
         self.assertTrue(s.requests[0].endswith(body.encode()))
 
+    def test_put_and_patch_send_the_whole_body_like_post(self):
+        s = self.serve(lambda req: b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+        for m, wire in (("put", b"PUT"), ("patch", b"PATCH")):
+            rc, doc, _ = run(OPEN, "--body", '{"a":1}', "--content-type", "application/json", m, "/items/7")
+            self.assertEqual((rc, doc["data"]["status"], doc["data"]["method"], doc["data"]["body"]), (0, 200, m, "ok"))
+            req = s.requests[-1]
+            self.assertTrue(req.startswith(wire + b" /items/7 HTTP/1.1\r\n"), req)
+            self.assertIn(b"Content-Length: 7\r\n", req)
+            self.assertIn(b"Content-Type: application/json\r\n", req)
+            self.assertTrue(req.endswith(b"\r\n\r\n" + b'{"a":1}'), req)
+        # an empty body (empty standard input; --body "" is args.bad-value) is Content-Length: 0, as for post
+        rc, doc, _ = run(OPEN, "--body-stdin", "--content-type", "text/plain", "put", "/empty")
+        self.assertEqual(rc, 0, doc)
+        self.assertIn(b"Content-Length: 0\r\n", s.requests[-1])
+        # from standard input
+        rc, doc, _ = run(OPEN, "--body-stdin", "--content-type", "text/plain", "patch", "/stdin", stdin="from stdin")
+        self.assertEqual(rc, 0, doc)
+        self.assertTrue(s.requests[-1].endswith(b"from stdin"))
+
+    def test_put_and_patch_need_a_body_and_a_type_and_delete_takes_none(self):
+        s = self.serve(lambda req: ok())
+        for m in ("put", "patch"):
+            self.assertEqual(self.rule(run(OPEN, m, "/")[1]), "fetch.body-required", m)
+            self.assertEqual(self.rule(run(OPEN, "--body", "x", m, "/")[1]), "fetch.body-required", m)
+        self.assertEqual(s.requests, [])
+
+    def test_delete_sends_no_body_and_no_content_length(self):
+        s = self.serve(lambda req: b"HTTP/1.1 204 No Content\r\n\r\n")
+        rc, doc, _ = run(OPEN, "delete", "/items/7")
+        self.assertEqual((rc, doc["data"]["status"], doc["data"]["method"]), (0, 204, "delete"))
+        req = s.requests[0]
+        self.assertTrue(req.startswith(b"DELETE /items/7 HTTP/1.1\r\n"), req)
+        self.assertNotIn(b"Content-Length", req)
+        self.assertTrue(req.endswith(b"\r\n\r\n"), req)
+
+    def test_put_patch_delete_follow_only_307_and_308(self):
+        def reply(req):
+            first = req.split(b" ", 2)[1]
+            if first == b"/a":
+                return b"HTTP/1.1 302 Found\r\nLocation: /b\r\nContent-Length: 0\r\n\r\n"
+            if first == b"/c":
+                return b"HTTP/1.1 308 Permanent\r\nLocation: /d\r\nContent-Length: 0\r\n\r\n"
+            return ok(b"end")
+        s = self.serve(reply)
+        for m, extra in (("put", ("--body", "payload", "--content-type", "text/plain")), ("patch", ("--body", "payload", "--content-type", "text/plain")), ("delete", ())):
+            n = len(s.requests)
+            rc, doc, _ = run(OPEN, "--max-redirects", "1", *extra, m, "/a")
+            # a 302 is the answer, not followed: the method is never silently changed
+            self.assertEqual((rc, doc["data"]["status"], len(s.requests) - n), (0, 302, 1), (m, doc))
+            rc, doc, _ = run(OPEN, "--max-redirects", "1", *extra, m, "/c")
+            self.assertEqual((rc, doc["data"]["status"], doc["data"]["redirects"][0]["method"]), (0, 200, m), (m, doc))
+            self.assertTrue(s.requests[-1].startswith(m.upper().encode() + b" /d HTTP/1.1"), s.requests[-1])
+            if extra:
+                self.assertTrue(s.requests[-1].endswith(b"payload"))
+
     def test_post_needs_a_body_and_a_type(self):
         s = self.serve(lambda req: ok())
         self.assertEqual(self.rule(run(OPEN, "post", "/")[1]), "fetch.body-required")
@@ -389,7 +445,7 @@ class Fetch(unittest.TestCase):
 
     def test_get_and_head_send_no_body(self):
         s = self.serve(lambda req: ok())
-        for m in ("get", "head"):
+        for m in ("get", "head", "delete"):
             self.assertEqual(self.rule(run(OPEN, "--body", "x", "--content-type", "text/plain", m, "/")[1]), "fetch.body-not-allowed")
         self.assertEqual(s.requests, [])
 

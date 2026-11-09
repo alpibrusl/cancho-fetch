@@ -29,15 +29,15 @@ import tls;
 import http_client_wire;
 
 pub fn extra() -> [] &static [byte] {
-    return "fetch.method|2|never|the METHOD is not one this tool sends (get, head, post);fetch.credential-unavailable|8|never|the credential this build holds for the host could not be read or is not a token (the operator's configuration, not the caller's);fetch.tls|8|never|the TLS handshake or the record layer failed (detail.tag says why: a name, a chain, a protocol error);fetch.redirect-not-allowed|2|never|a redirect points somewhere this build was not given;fetch.redirect-limit|8|never|more redirects than --max-redirects;fetch.body-required|2|never|post needs --body (or --body-stdin) and --content-type;fetch.body-not-allowed|2|never|--body, --body-stdin and --content-type belong to post;fetch.request-body-too-large|2|never|--body or the body on standard input is larger than the 65536 bytes this tool sends;fetch.url-not-a-path|2|never|PATH is a request target (it begins with a single /), not a URL;fetch.path-malformed|2|never|PATH has a byte a request target may not hold;fetch.host-not-allowed|2|sometimes|--host names no host this build was given;fetch.host-required|2|sometimes|more than one host was baked in and --host was not given;fetch.header-malformed|2|never|--accept holds a byte a header value may not hold;fetch.connect-failed|8|never|the connection could not be made;fetch.peer-not-public|8|never|the host resolved to a private, loopback or link-local address and this build does not allow it;fetch.timeout|8|never|the deadline passed before the response was complete;fetch.body-too-large|8|never|the response body is larger than --max-bytes;fetch.response-malformed|8|never|the response is not one this tool reads (the detail names the framing rule);fetch.response-truncated|8|never|the connection ended before the response was complete";
+    return "fetch.method|2|never|the METHOD is not one this tool sends (get, head, post, put, patch, delete);fetch.credential-unavailable|8|never|the credential this build holds for the host could not be read or is not a token (the operator's configuration, not the caller's);fetch.tls|8|never|the TLS handshake or the record layer failed (detail.tag says why: a name, a chain, a protocol error);fetch.redirect-not-allowed|2|never|a redirect points somewhere this build was not given;fetch.redirect-limit|8|never|more redirects than --max-redirects;fetch.body-required|2|never|post, put and patch need --body (or --body-stdin) and --content-type;fetch.body-not-allowed|2|never|--body, --body-stdin and --content-type belong to post, put and patch;fetch.request-body-too-large|2|never|--body or the body on standard input is larger than the 65536 bytes this tool sends;fetch.url-not-a-path|2|never|PATH is a request target (it begins with a single /), not a URL;fetch.path-malformed|2|never|PATH has a byte a request target may not hold;fetch.host-not-allowed|2|sometimes|--host names no host this build was given;fetch.host-required|2|sometimes|more than one host was baked in and --host was not given;fetch.header-malformed|2|never|--accept holds a byte a header value may not hold;fetch.connect-failed|8|never|the connection could not be made;fetch.peer-not-public|8|never|the host resolved to a private, loopback or link-local address and this build does not allow it;fetch.timeout|8|never|the deadline passed before the response was complete;fetch.body-too-large|8|never|the response body is larger than --max-bytes;fetch.response-malformed|8|never|the response is not one this tool reads (the detail names the framing rule);fetch.response-truncated|8|never|the connection ended before the response was complete";
 }
 
 pub fn flag_table() -> [] &static [byte] {
-    return "host||text|none||which baked host to use: the host (or host:port) of one of this build's allowed entries, required when more than one is baked in;max-bytes||nat|none|1048576|the most response body bytes accepted (1 to 16777216), a larger body is fetch.body-too-large;timeout-ms||nat|none|10000|the deadline for the whole request once the name has resolved, in milliseconds (1 to 60000);accept||text|none||the Accept request header;body||text|none||the request body, for post (at most 65536 bytes);body-stdin||bool|none||the request body is read from standard input instead of --body, for post (at most 65536 bytes);content-type||text|none||the Content-Type of the request body, required with --body;max-redirects||nat|none|0|how many redirects to follow (0 to 5), only to a host this build was given, a 3xx is otherwise the answer;format||choice:json/text|none|json|json for an envelope, text writes the response body to standard output";
+    return "host||text|none||which baked host to use: the host (or host:port) of one of this build's allowed entries, required when more than one is baked in;max-bytes||nat|none|1048576|the most response body bytes accepted (1 to 16777216), a larger body is fetch.body-too-large;timeout-ms||nat|none|10000|the deadline for the whole request once the name has resolved, in milliseconds (1 to 60000);accept||text|none||the Accept request header;body||text|none||the request body, for post, put and patch (at most 65536 bytes);body-stdin||bool|none||the request body is read from standard input instead of --body, for post, put and patch (at most 65536 bytes);content-type||text|none||the Content-Type of the request body, required with --body;max-redirects||nat|none|0|how many redirects to follow (0 to 5), only to a host this build was given, a 3xx is otherwise the answer;format||choice:json/text|none|json|json for an envelope, text writes the response body to standard output";
 }
 
 pub fn tool() -> [] describe.Tool {
-    return describe.Tool { name: "fetch", version: "0.1.0", summary: "Send one HTTP GET, HEAD or POST request to a host this build was given, and answer the status, the headers and the body. The hosts are in the binary and in its authority row; a request for any other host is refused before a socket opens. No redirects, credentials or cookies.", usage: "fetch [--host H] [--max-bytes N] [--timeout-ms N] [--accept TEXT] [(--body TEXT | --body-stdin) --content-type TYPE] [--max-redirects N] [--format json|text] METHOD PATH", output: "document", schema: "fetch.v1", flags: flag_table(), operands: "METHOD|name|1|1|get, head or post;PATH|text|1|1|the request target: a path beginning with a single /, optionally with a query", rules: "args.unknown-flag;args.missing-value;args.bad-value;args.unexpected-value;args.duplicate-flag;args.conflict;args.missing-operand;args.too-many-operands;fetch.method;fetch.redirect-not-allowed;fetch.redirect-limit;fetch.credential-unavailable;fetch.tls;fetch.body-required;fetch.body-not-allowed;fetch.request-body-too-large;fetch.url-not-a-path;fetch.path-malformed;fetch.host-not-allowed;fetch.host-required;fetch.header-malformed;fetch.connect-failed;fetch.peer-not-public;fetch.timeout;fetch.body-too-large;fetch.response-malformed;fetch.response-truncated", extra_rules: extra(), limits: "max-bytes|1048576|16777216;timeout-ms|10000|60000;max-redirects|0|5", reversibility: "irreversible-consequential", stdin: "with --body-stdin", guarantees: "bounded_memory" };
+    return describe.Tool { name: "fetch", version: "0.1.0", summary: "Send one HTTP GET, HEAD, POST, PUT, PATCH or DELETE request to a host this build was given, and answer the status, the headers and the body. The hosts are in the binary and in its authority row; a request for any other host is refused before a socket opens. No redirects, credentials or cookies.", usage: "fetch [--host H] [--max-bytes N] [--timeout-ms N] [--accept TEXT] [(--body TEXT | --body-stdin) --content-type TYPE] [--max-redirects N] [--format json|text] METHOD PATH", output: "document", schema: "fetch.v1", flags: flag_table(), operands: "METHOD|name|1|1|get, head, post, put, patch or delete;PATH|text|1|1|the request target: a path beginning with a single /, optionally with a query", rules: "args.unknown-flag;args.missing-value;args.bad-value;args.unexpected-value;args.duplicate-flag;args.conflict;args.missing-operand;args.too-many-operands;fetch.method;fetch.redirect-not-allowed;fetch.redirect-limit;fetch.credential-unavailable;fetch.tls;fetch.body-required;fetch.body-not-allowed;fetch.request-body-too-large;fetch.url-not-a-path;fetch.path-malformed;fetch.host-not-allowed;fetch.host-required;fetch.header-malformed;fetch.connect-failed;fetch.peer-not-public;fetch.timeout;fetch.body-too-large;fetch.response-malformed;fetch.response-truncated", extra_rules: extra(), limits: "max-bytes|1048576|16777216;timeout-ms|10000|60000;max-redirects|0|5", reversibility: "irreversible-consequential", stdin: "with --body-stdin", guarantees: "bounded_memory" };
 }
 
 pub fn built() -> [] describe.Built {
@@ -153,7 +153,10 @@ pub struct Plan {
     // The entry of the baked list the request goes to.
     host: int,
     head: bool,
+    // The request sends a body (post, put, patch).
     post: bool,
+    // The method: 0 get, 1 head, 2 post, 3 put, 4 patch, 5 delete.
+    verb: int,
     max_bytes: int,
     timeout: int,
     text_mode: bool,
@@ -227,6 +230,7 @@ pub fn plan[&h, &g, &l](heap: &!h Heap, args: &g Args, hosts: &l [byte]) -> [hea
     var e = errs;
     var head = false;
     var post = false;
+    var verb = 0;
     var body = buffer.empty(heap, 1);
     var content_type = buffer.empty(heap, 1);
     var redirects = 0;
@@ -258,10 +262,20 @@ pub fn plan[&h, &g, &l](heap: &!h Heap, args: &g Args, hosts: &l [byte]) -> [hea
                 head = false;
             } else if bytes.equal(method, "head") {
                 head = true;
+                verb = 1;
             } else if bytes.equal(method, "post") {
                 post = true;
+                verb = 2;
+            } else if bytes.equal(method, "put") {
+                post = true;
+                verb = 3;
+            } else if bytes.equal(method, "patch") {
+                post = true;
+                verb = 4;
+            } else if bytes.equal(method, "delete") {
+                verb = 5;
             } else {
-                var w = fail.open_in(heap, extra(), "fetch.method", "this tool sends get, head and post", "METHOD is get, head or post; other methods are not offered");
+                var w = fail.open_in(heap, extra(), "fetch.method", "this tool sends get, head, post, put, patch and delete", "METHOD is get, head, post, put, patch or delete; other methods are not offered");
                 w = fail.no_repair(heap, w);
                 w = fail.detail_open(heap, w);
                 w = json.put_key(heap, w, "method");
@@ -328,9 +342,9 @@ pub fn plan[&h, &g, &l](heap: &!h Heap, args: &g Args, hosts: &l [byte]) -> [hea
         if has_body && has_stdin {
             e = flag_problem(heap, e, "args.conflict", "--body and --body-stdin exclude each other", "give the body one way", "--body --body-stdin");
         } else if post && !((has_body || has_stdin) && has_type) {
-            e = flag_problem(heap, e, "fetch.body-required", "post sends a body: it needs --body (or --body-stdin) and --content-type", "add --body TEXT --content-type TYPE (for example application/json), or --body-stdin to send the body on standard input", "--body");
+            e = flag_problem(heap, e, "fetch.body-required", "post, put and patch send a body: they need --body (or --body-stdin) and --content-type", "add --body TEXT --content-type TYPE (for example application/json), or --body-stdin to send the body on standard input", "--body");
         } else if !post && (has_body || has_stdin || has_type) && cli.operand_count(p) >= 2 {
-            e = flag_problem(heap, e, "fetch.body-not-allowed", "--body, --body-stdin and --content-type belong to post; get and head send no body", "drop them, or use post", "--body");
+            e = flag_problem(heap, e, "fetch.body-not-allowed", "--body, --body-stdin and --content-type belong to post, put and patch; get, head and delete send no body", "drop them, or use post, put or patch", "--body");
         }
         from_stdin = post && has_stdin && !has_body && has_type;
         if post && (has_body || from_stdin) && has_type {
@@ -379,7 +393,7 @@ pub fn plan[&h, &g, &l](heap: &!h Heap, args: &g Args, hosts: &l [byte]) -> [hea
         }
     }
     cli.drop(heap, parsed);
-    return Plan { host: host, head: head, post: post, max_bytes: most, timeout: timeout, text_mode: text_mode, redirects_max: redirects, redirects_left: redirects, path: path, extra_headers: extra_headers, content_type: content_type, body: body, from_stdin: from_stdin, hops: buffer.empty(heap, 1), errors: e };
+    return Plan { host: host, head: head, post: post, verb: verb, max_bytes: most, timeout: timeout, text_mode: text_mode, redirects_max: redirects, redirects_left: redirects, path: path, extra_headers: extra_headers, content_type: content_type, body: body, from_stdin: from_stdin, hops: buffer.empty(heap, 1), errors: e };
 }
 
 // Does the plan carry a refusal already?
@@ -391,7 +405,7 @@ pub fn refused[&p](plan: &p Plan) -> [] bool {
 // `request_body_ceiling()` bytes, and one more is read to tell "exactly the ceiling" from "more". Standard input is read
 // before any socket opens, so a refusal here costs the network nothing.
 pub fn take_stdin[&h, &i](heap: &!h Heap, io: &!i Io, plan: Plan) -> [heap, io_read] Plan {
-    let Plan { host, head, post, max_bytes, timeout, text_mode, redirects_max, redirects_left, path, extra_headers, content_type, body, from_stdin, hops, errors } = plan;
+    let Plan { host, head, post, verb, max_bytes, timeout, text_mode, redirects_max, redirects_left, path, extra_headers, content_type, body, from_stdin, hops, errors } = plan;
     var next_body = body;
     var e = errors;
     var clean = false;
@@ -410,7 +424,7 @@ pub fn take_stdin[&h, &i](heap: &!h Heap, io: &!i Io, plan: Plan) -> [heap, io_r
             e = flag_problem(heap, e, "fetch.request-body-too-large", "the body on standard input is larger than the 65536 bytes this tool sends", "send less, or split the request", "--body-stdin");
         }
     }
-    return Plan { host: host, head: head, post: post, max_bytes: max_bytes, timeout: timeout, text_mode: text_mode, redirects_max: redirects_max, redirects_left: redirects_left, path: path, extra_headers: extra_headers, content_type: content_type, body: next_body, from_stdin: false, hops: hops, errors: e };
+    return Plan { host: host, head: head, post: post, verb: verb, max_bytes: max_bytes, timeout: timeout, text_mode: text_mode, redirects_max: redirects_max, redirects_left: redirects_left, path: path, extra_headers: extra_headers, content_type: content_type, body: next_body, from_stdin: false, hops: hops, errors: e };
 }
 
 pub fn host_of[&p](plan: &p Plan) -> [] int {
@@ -418,7 +432,7 @@ pub fn host_of[&p](plan: &p Plan) -> [] int {
 }
 
 pub fn drop_plan[&h](heap: &!h Heap, plan: Plan) -> [heap] int {
-    let Plan { host, head, post, max_bytes, timeout, text_mode, redirects_max, redirects_left, path, extra_headers, content_type, body, from_stdin, hops, errors } = plan;
+    let Plan { host, head, post, verb, max_bytes, timeout, text_mode, redirects_max, redirects_left, path, extra_headers, content_type, body, from_stdin, hops, errors } = plan;
     buffer.drop(heap, body);
     buffer.drop(heap, content_type);
     buffer.drop(heap, hops);
@@ -668,7 +682,7 @@ fn locate[&h, &p, &l, &x](heap: &!h Heap, e: fail.Errors, plan: &p Plan, hosts: 
 // The plan for the hop `answer` asked for. A 301, 302 or 303 turns a post into a get without its body; 307 and 308 keep
 // the method and the body. The hop is recorded for the envelope, and the deadline is what is left of the whole request.
 pub fn retarget[&h, &l](heap: &!h Heap, plan: Plan, answer: Answer, hosts: &l [byte]) -> [heap] Plan {
-    let Plan { host, head, post, max_bytes, timeout, text_mode, redirects_max, redirects_left, path, extra_headers, content_type, body, from_stdin, hops, errors } = plan;
+    let Plan { host, head, post, verb, max_bytes, timeout, text_mode, redirects_max, redirects_left, path, extra_headers, content_type, body, from_stdin, hops, errors } = plan;
     let Answer { faults, payload, shown, to_path, follow, code, took } = answer;
     var line = hops;
     if redirects_max > redirects_left {
@@ -676,10 +690,18 @@ pub fn retarget[&h, &l](heap: &!h Heap, plan: Plan, answer: Answer, hosts: &l [b
     }
     let turns = post && code != 307 && code != 308;
     var after = "get";
-    if head {
+    if turns {
+        after = "get";
+    } else if verb == 1 {
         after = "head";
-    } else if post && !turns {
+    } else if verb == 2 {
         after = "post";
+    } else if verb == 3 {
+        after = "put";
+    } else if verb == 4 {
+        after = "patch";
+    } else if verb == 5 {
+        after = "delete";
     }
     var w = json.begin_object(heap, json.writer(heap, 160));
     w = json.put_key(heap, w, "status");
@@ -712,6 +734,10 @@ pub fn retarget[&h, &l](heap: &!h Heap, plan: Plan, answer: Answer, hosts: &l [b
         next_body = buffer.empty(heap, 1);
         next_type = buffer.empty(heap, 1);
     }
+    var next_verb = verb;
+    if turns {
+        next_verb = 0;
+    }
     var left = timeout - took;
     if left < 1 {
         left = 1;
@@ -720,7 +746,7 @@ pub fn retarget[&h, &l](heap: &!h Heap, plan: Plan, answer: Answer, hosts: &l [b
     buffer.drop(heap, payload);
     buffer.drop(heap, shown);
     fail.drop(heap, faults);
-    return Plan { host: follow, head: head, post: post && !turns, max_bytes: max_bytes, timeout: left, text_mode: text_mode, redirects_max: redirects_max, redirects_left: redirects_left - 1, path: to_path, extra_headers: extra_headers, content_type: next_type, body: next_body, from_stdin: false, hops: line, errors: errors };
+    return Plan { host: follow, head: head, post: post && !turns, verb: next_verb, max_bytes: max_bytes, timeout: left, text_mode: text_mode, redirects_max: redirects_max, redirects_left: redirects_left - 1, path: to_path, extra_headers: extra_headers, content_type: next_type, body: next_body, from_stdin: false, hops: line, errors: errors };
 }
 
 pub fn follows[&a](answer: &a Answer) -> [] bool {
@@ -841,8 +867,14 @@ fn data[&h, &p, &a, &r, &x, &b, &q](heap: &!h Heap, plan: &p Plan, authority: &a
     w = json.put_key(heap, w, "method");
     if plan.head {
         w = json.put_string(heap, w, "head");
-    } else if plan.post {
+    } else if plan.verb == 2 {
         w = json.put_string(heap, w, "post");
+    } else if plan.verb == 3 {
+        w = json.put_string(heap, w, "put");
+    } else if plan.verb == 4 {
+        w = json.put_string(heap, w, "patch");
+    } else if plan.verb == 5 {
+        w = json.put_string(heap, w, "delete");
     } else {
         w = json.put_string(heap, w, "get");
     }
@@ -970,8 +1002,14 @@ pub fn exchange[&h, &k, &p, &a, &l, &m, &o, &y, &t, &u](heap: &!h Heap, clock: &
                 var method = "GET";
                 if plan.head {
                     method = "HEAD";
-                } else if plan.post {
+                } else if plan.verb == 2 {
                     method = "POST";
+                } else if plan.verb == 3 {
+                    method = "PUT";
+                } else if plan.verb == 4 {
+                    method = "PATCH";
+                } else if plan.verb == 5 {
+                    method = "DELETE";
                 }
                 let sending = buffer.bytes(plan.body);
                 var framing = http_client_wire.body_none();
@@ -1149,7 +1187,7 @@ pub fn exchange[&h, &k, &p, &a, &l, &m, &o, &y, &t, &u](heap: &!h Heap, clock: &
                         st[3] = 1;
                     }
                     // A redirect: followed when asked for and allowed, else the 3xx is the answer.
-                    if is_redirect(status_code) && loc_z > loc_a && plan.redirects_max > 0 {
+                    if is_redirect(status_code) && loc_z > loc_a && plan.redirects_max > 0 && (plan.verb < 3 || status_code == 307 || status_code == 308) {
                         if plan.redirects_left == 0 {
                             e = simple_detail(heap, e, "fetch.redirect-limit", "the response redirects again after --max-redirects were followed", "raise --max-redirects, up to 5, or fetch the final location yourself", "max_redirects", plan.redirects_max);
                         } else {
