@@ -498,3 +498,40 @@ the hosts; it already did, in the row.)
 * **Schema**: `schemas/fetch.v1.json` lists the six methods (the response `method` enum also lacked `post`, which was already sent).
 * **Tests**: wire form of each verb (request line, `Content-Length`, `Content-Type`, no body for `delete`), an empty `put` body, `patch`
   from standard input, the refusals, and 302 not followed / 308 followed for each of the three with the method and body kept.
+
+## 8.11 Compressed responses (`--compressed`): design, not built
+
+Status: **design.** Written before the code, as the repository asks. What was read to write it (not run): `std/flate.cho` and `docs/flate.md` in
+cancho at 5a5dd1f, and `tools/fetch/fetchcore.cho` as it is after 8.10.
+
+**A correction.** The list of curl's features that fetch lacks said gzip "needs a cancho gzip package". It does not: `std.flate` has
+`gunzip(heap, src, limit)` (RFC 1952, CRC-32 and length checked), whose `limit` makes the decompressed size a bound the caller sets, and
+`docs/flate.md` says nothing in it traps on any input. The work is in fetch.
+
+Decisions **[choice]**, each to be held by a test before it is called built:
+
+1. **Opt-in, as curl's `--compressed`.** A flag `--compressed` sends `Accept-Encoding: gzip` and decodes a `Content-Encoding: gzip` body.
+   Without it nothing changes: `Accept-Encoding: identity`, and a body is returned as the server sent it. Reason: the existing behaviour
+   and its tests stay exactly as they are, and a caller that wants raw bytes (a checksum of the compressed file) keeps getting them.
+2. **The bound is on the decompressed size.** `--max-bytes` is checked twice: on the bytes read from the wire, as now, and as the `limit`
+   given to `gunzip`, so a small body that inflates past the cap (a decompression bomb) is `fetch.body-too-large`, with `detail.stage`
+   saying `decoded`. Memory is therefore at most about twice `--max-bytes` (the wire body and the decoded one, both held at once; the
+   ceiling is 16 MiB, so about 32 MiB at the largest) instead of one times it. **[measure]** at the build step, with the launcher
+   `scripts/maxrss.c`, and `bounded_memory` stays claimed only if the number holds.
+3. **Only `gzip`.** A `Content-Encoding` other than `gzip` or `identity` (`br`, `deflate`, `zstd`, a list) with `--compressed` is
+   `fetch.content-encoding-unsupported`, with the value in `detail`; the body is not returned undecoded, because a caller that asked for
+   `--compressed` would otherwise read compressed bytes as text. A list of codings (`gzip, br`) is refused the same way.
+4. **A body that does not decode is a refusal, not a partial answer.** A bad header, a failed CRC-32 or length, or a truncated stream is
+   `fetch.content-decoding`, with `std.flate`'s status in `detail.status`. `head`, `204`, `304` and a redirect that is followed have no body
+   to decode and are untouched.
+5. **The envelope says it happened.** A `decoded` field (`"gzip"` or `null`) is added to the `data` object and to `fetch.v1.json`;
+   `content-encoding` joins the headers that are shown, so a caller can see what the server sent. `body_bytes` is the decoded size.
+   `--format text` writes the decoded body.
+6. **No change to the authority row**: `std.flate` is pure and uses the heap, which the row already has.
+
+Tests to write first: a gzip body decoded and equal to the source; the same body without `--compressed` returned raw with
+`Accept-Encoding: identity`; a bomb (a few hundred bytes that inflate to more than `--max-bytes`) refused with `stage: decoded` and the memory
+measured; a corrupt CRC; a truncated stream; `br` refused; `--compressed` with `head`; a chunked gzip body; the same over https.
+
+Open: whether `--compressed` should also be a baked default per host (some APIs only answer compressed); not proposed here.
+
