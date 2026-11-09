@@ -42,7 +42,7 @@ jobs:
           path: cancho-bin
           key: cancho-compiler-${{ runner.os }}-${{ steps.pin.outputs.rev }}
 
-      - name: Install it (only when it is not cached): the release of that revision, built by cancho
+      - name: Install the release of that revision, built by cancho (only when it is not cached)
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           curl -fsSL https://raw.githubusercontent.com/alpibrusl/cancho/main/scripts/install.sh -o install.sh
