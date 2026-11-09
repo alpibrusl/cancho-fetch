@@ -436,6 +436,102 @@ class Fetch(unittest.TestCase):
             if extra:
                 self.assertTrue(s.requests[-1].endswith(b"payload"))
 
+    # ---- --compressed (docs/design.md 8.11) ----
+
+    @staticmethod
+    def gz(payload, **kw):
+        import gzip as _gzip
+        return _gzip.compress(payload, mtime=0, **kw)
+
+    @staticmethod
+    def gz_reply(body, extra=b""):
+        return b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\n" + extra + b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body
+
+    def test_compressed_decodes_a_gzip_body(self):
+        text = ("hello, compressed world\n" * 200).encode()
+        packed = self.gz(text)
+        s = self.serve(lambda req: self.gz_reply(packed))
+        rc, doc, _ = run(OPEN, "--compressed", "get", "/")
+        self.assertEqual((rc, doc["data"]["status"], doc["data"]["decoded"], doc["data"]["body"]), (0, 200, "gzip", text.decode()), doc)
+        self.assertEqual(doc["data"]["body_bytes"], len(text))
+        self.assertIn(b"Accept-Encoding: gzip\r\n", s.requests[0])
+        self.assertNotIn(b"Accept-Encoding: identity", s.requests[0])
+        self.assertIn("content-encoding", [h["name"].lower() for h in doc["data"]["headers"]])
+        # --format text writes the decoded body
+        r = subprocess.run([OPEN, "--host", "127.0.0.1:%d" % PORT, "--compressed", "--format", "text", "get", "/"], capture_output=True)
+        self.assertEqual((r.returncode, r.stdout), (0, text))
+
+    def test_without_compressed_the_body_is_returned_as_sent(self):
+        packed = self.gz(b"payload")
+        s = self.serve(lambda req: self.gz_reply(packed))
+        rc, doc, _ = run(OPEN, "get", "/")
+        self.assertEqual((rc, doc["data"]["decoded"], doc["data"]["body_bytes"]), (0, None, len(packed)), doc)
+        self.assertIn(b"Accept-Encoding: identity\r\n", s.requests[0])
+
+    def test_a_decompression_bomb_is_refused_by_the_decoded_size(self):
+        packed = self.gz(b"\0" * 5_000_000)
+        self.assertLess(len(packed), 20_000)
+        s = self.serve(lambda req: self.gz_reply(packed))
+        rc, doc, _ = run(OPEN, "--compressed", "--max-bytes", "100000", "get", "/")
+        self.assertEqual((rc, self.rule(doc)), (8, "fetch.body-too-large"), doc)
+        self.assertIn("decoded", doc["error"]["message"])
+        # the same body fits when the cap allows the decoded size
+        rc, doc, _ = run(OPEN, "--compressed", "--max-bytes", "6000000", "get", "/")
+        self.assertEqual((rc, doc["data"]["body_bytes"]), (0, 5_000_000), doc)
+
+    def test_a_gzip_body_that_does_not_decode_is_a_refusal(self):
+        good = self.gz(b"some text that compresses " * 50)
+        bad_crc = good[:-8] + bytes([good[-8] ^ 0xFF]) + good[-7:]
+        bad_len = good[:-1] + bytes([good[-1] ^ 0x01])
+        cases = {"crc": bad_crc, "length": bad_len, "truncated": good[:-12], "not gzip": b"this is plain text"}
+        bodies = list(cases.values())
+        which = {"i": 0}
+
+        def reply(req):
+            b = bodies[which["i"]]
+            return self.gz_reply(b)
+        s = self.serve(reply)
+        for i, name in enumerate(cases):
+            which["i"] = i
+            rc, doc, _ = run(OPEN, "--compressed", "get", "/")
+            self.assertEqual((rc, self.rule(doc)), (8, "fetch.content-decoding"), (name, doc))
+            self.assertIn("status", doc["error"]["detail"])
+
+    def test_another_content_encoding_is_refused_under_compressed(self):
+        def reply(req):
+            coding = b"gzip, br" if req.startswith(b"GET /list") else b"br"
+            return b"HTTP/1.1 200 OK\r\nContent-Encoding: " + coding + b"\r\nContent-Length: 3\r\n\r\nabc"
+        self.serve(reply)
+        rc, doc, _ = run(OPEN, "--compressed", "get", "/")
+        self.assertEqual((rc, self.rule(doc), doc["error"]["detail"]["encoding"]), (8, "fetch.content-encoding-unsupported", "br"), doc)
+        # a list of codings is refused the same way
+        rc, doc, _ = run(OPEN, "--compressed", "get", "/list")
+        self.assertEqual((rc, self.rule(doc)), (8, "fetch.content-encoding-unsupported"), doc)
+
+    def test_identity_and_plain_bodies_pass_through_under_compressed(self):
+        def reply(req):
+            if req.startswith(b"GET /identity"):
+                return b"HTTP/1.1 200 OK\r\nContent-Encoding: identity\r\nContent-Length: 5\r\n\r\nplain"
+            return ok(b"no encoding header")
+        self.serve(reply)
+        rc, doc, _ = run(OPEN, "--compressed", "get", "/identity")
+        self.assertEqual((rc, doc["data"]["body"], doc["data"]["decoded"]), (0, "plain", None), doc)
+        rc, doc, _ = run(OPEN, "--compressed", "get", "/")
+        self.assertEqual((rc, doc["data"]["body"], doc["data"]["decoded"]), (0, "no encoding header", None), doc)
+
+    def test_compressed_head_has_no_body_to_decode(self):
+        self.serve(lambda req: b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 40\r\n\r\n")
+        rc, doc, _ = run(OPEN, "--compressed", "head", "/")
+        self.assertEqual((rc, doc["data"]["status"], doc["data"]["decoded"]), (0, 200, None), doc)
+
+    def test_a_chunked_gzip_body_is_decoded(self):
+        text = b"chunked and compressed " * 300
+        packed = self.gz(text)
+        chunks = b"".join(b"%x\r\n" % len(packed[i:i + 100]) + packed[i:i + 100] + b"\r\n" for i in range(0, len(packed), 100)) + b"0\r\n\r\n"
+        self.serve(lambda req: b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n" + chunks)
+        rc, doc, _ = run(OPEN, "--compressed", "get", "/")
+        self.assertEqual((rc, doc["data"]["decoded"], doc["data"]["body"]), (0, "gzip", text.decode()), doc)
+
     def test_post_needs_a_body_and_a_type(self):
         s = self.serve(lambda req: ok())
         self.assertEqual(self.rule(run(OPEN, "post", "/")[1]), "fetch.body-required")

@@ -241,6 +241,12 @@
             "https"
           ]
         },
+        "decoded": {
+          "enum": [
+            "gzip",
+            null
+          ]
+        },
         "credentialed": {
           "type": "boolean"
         },
@@ -343,6 +349,7 @@
       "required": [
         "method",
         "scheme",
+        "decoded",
         "credentialed",
         "host",
         "path",

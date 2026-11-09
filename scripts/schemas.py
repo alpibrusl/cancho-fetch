@@ -105,6 +105,7 @@ SCHEMAS = {
     "fetch": document("fetch", obj({
         "method": {"enum": ["get", "head", "post", "put", "patch", "delete"]},
         "scheme": {"enum": ["http", "https"]},
+        "decoded": {"enum": ["gzip", None]},
         "credentialed": {"type": "boolean"},
         "host": {"type": "string"},
         "path": {"type": "string"},
