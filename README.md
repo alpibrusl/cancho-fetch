@@ -5,7 +5,7 @@ authority row (`net_out("api.example.com:443")`) where a reviewer can read it, i
 Written in [cancho](https://github.com/alpibrusl/cancho), following the contract of
 [cancho-tools](https://github.com/alpibrusl/cancho-tools).
 
-**Status: alpha prerelease. Built and tested, not production-ready.** `get`, `head` and `post` over `http` and `https`, redirects to baked hosts only,
+**Status: alpha prerelease. Built and tested, not production-ready.** `get`, `head`, `post`, `put`, `patch` and `delete` over `http` and `https`, redirects to baked hosts only,
 per-host credentials read from files, an MCP server, and the authority row derived and gated; CI runs 60-odd loopback tests with
 the pinned compiler (cancho 5a5dd1f, the release written in cancho and built by cancho; CI installs it, it does not build a compiler; the measurements in docs/design.md were made at 597e6b0). The design, what each step measured, and the benchmark against curl are in
 [docs/design.md](docs/design.md) (sections 8.1 to 8.7).
@@ -26,6 +26,7 @@ on `PATH`; about three minutes, most of it compiling the TLS packages).
 ```
 fetch get  /v1/items --host api.example.com --max-bytes 65536
 fetch post /v1/items --host api.example.com --body-stdin --content-type application/json < body.json
+fetch delete /v1/items/7 --host api.example.com
 ```
 
 One binary per allow-list. The hosts are `narrow` literals in the source, so `cancho authority` shows one `net_out` label

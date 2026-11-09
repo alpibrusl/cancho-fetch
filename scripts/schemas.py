@@ -103,7 +103,7 @@ TB = {"$ref": "#/$defs/text_or_bytes"}
 
 SCHEMAS = {
     "fetch": document("fetch", obj({
-        "method": {"enum": ["get", "head"]},
+        "method": {"enum": ["get", "head", "post", "put", "patch", "delete"]},
         "scheme": {"enum": ["http", "https"]},
         "credentialed": {"type": "boolean"},
         "host": {"type": "string"},
@@ -117,7 +117,7 @@ SCHEMAS = {
             "status": {"enum": [301, 302, 303, 307, 308]},
             "from": {"type": "string"}, "path": {"type": "string"},
             "to": {"type": "string"}, "to_path": {"type": "string"},
-            "method": {"enum": ["get", "head", "post"]},
+            "method": {"enum": ["get", "head", "post", "put", "patch", "delete"]},
         })},
         "peer": {"type": "string"},
         "milliseconds": NAT,

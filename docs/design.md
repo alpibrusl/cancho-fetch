@@ -94,7 +94,7 @@ fetch post <path> [--host H] --body-stdin | --body TEXT ...
 What is not checked, as there: whether a model picks the right host or flag from the description, and whether the
 envelope fits a context window; both are empirical.
 
-Not offered, each with a tag and a pointer to `curl`: other methods (`PUT`, `DELETE`, `PATCH`), proxies, cookies, HTTP/2,
+Not offered, each with a tag and a pointer to `curl`: other methods (`OPTIONS`, `TRACE`, `CONNECT`; `PUT`, `PATCH` and `DELETE` are built, 8.10), proxies, cookies, HTTP/2,
 client certificates, `Range`, compression (`Accept-Encoding: identity` is sent), uploads of files, a bare IP as a host.
 
 ## 4. The authority row (read; the numbers are for step 1)
@@ -476,3 +476,25 @@ the hosts; it already did, in the row.)
   `generated/mcp/tools.cho` carries the two canonical test hosts, and a real deployment regenerates it with its own
   (`scripts/mcp.py build`), as it already had to for the tool's directory.
 * **Test**: `test_tools_list` compares the enum to the two hosts the MCP tests now build fetch with (the canonical ones, so `mcp.py --check` in `test_generated_files_are_current` compares like with like; the module used to build with the six hosts of the fetch tests, which no longer matches a schema that lists hosts).
+
+## 8.10 `put`, `patch` and `delete`
+
+`fetch put|patch PATH (--body TEXT | --body-stdin) --content-type TYPE` and `fetch delete PATH`. Decisions:
+
+* **`put` and `patch` are `post` with another verb**: same body sources, same 65,536-byte ceiling, same `Content-Type` rule, same
+  `fetch.body-required` and `fetch.request-body-too-large` (an empty body, from empty standard input, is `Content-Length: 0`, which `packages/http-client`'s
+  `write_head` already writes for these three methods). **`delete` sends no body**, like `get`: `--body`, `--body-stdin` and
+  `--content-type` with it are `fetch.body-not-allowed`. (curl allows a body on `DELETE`; an agent-facing tool that cannot send one
+  cannot be asked to, and the rare API that wants one can use `post`.)
+* **Methods are lowercase and exact**: `options`, `trace`, `connect`, `PUT` and `Delete` are `fetch.method`, whose hint
+  lists the six.
+* **Redirects**: `put`, `patch` and `delete` follow only 307 and 308, which keep the method and the body. A 301, 302 or 303 is
+  returned as the answer, not followed: turning a `PUT` into a `GET` (what a browser does for `post`) would report a read as if it
+  were the write that was asked for, and silently dropping a `DELETE` is worse. `post` is unchanged (301/302/303 turn it into a `get`).
+* **Nothing else changed**: the authority row is the same (`net_out` hosts, `io_read` for `--body-stdin`), the class stays
+  `irreversible-consequential` for every verb, and no build switch limits the verbs. A reviewer who wants a build that can only
+  read still has the row to say so for the network (it cannot), but not for the verb; a per-build verb list is the obvious next knob
+  and is not built.
+* **Schema**: `schemas/fetch.v1.json` lists the six methods (the response `method` enum also lacked `post`, which was already sent).
+* **Tests**: wire form of each verb (request line, `Content-Length`, `Content-Type`, no body for `delete`), an empty `put` body, `patch`
+  from standard input, the refusals, and 302 not followed / 308 followed for each of the three with the method and body kept.

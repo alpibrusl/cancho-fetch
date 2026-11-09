@@ -228,7 +228,11 @@
         "method": {
           "enum": [
             "get",
-            "head"
+            "head",
+            "post",
+            "put",
+            "patch",
+            "delete"
           ]
         },
         "scheme": {
@@ -310,7 +314,10 @@
                 "enum": [
                   "get",
                   "head",
-                  "post"
+                  "post",
+                  "put",
+                  "patch",
+                  "delete"
                 ]
               }
             },
