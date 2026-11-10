@@ -535,3 +535,43 @@ measured; a corrupt CRC; a truncated stream; `br` refused; `--compressed` with `
 
 Open: whether `--compressed` should also be a baked default per host (some APIs only answer compressed); not proposed here.
 
+## 8.12 Retries (`--retry N`): design, not built
+
+Status: **design.** One thing was measured to write it: the wait between attempts. cancho has no sleep builtin (`docs/atomics.md` §6 says a `Poller`
+wait with a timeout and no descriptors "might serve as a sleep; not tried"). Tried, with the compiler built from cancho 335bbe6: a function that
+creates a poller and calls `poller_wait(poller, events, 300)` with nothing registered returned 0 after **302 ms**, three runs of three, and needs only
+the `poll` label this tool's row already has. So no label is added to the authority row.
+
+Decisions **[choice]**, each to be held by a test before it is called built:
+
+1. **`--retry N`, 0 to 5, default 0.** With 0 nothing changes. The budget is shared by the whole request (all redirect hops), as
+   `--max-redirects` is, and is reported: `attempts` (an integer, 1 or more) joins the `data` object and `fetch.v1.json`.
+2. **What is retried, by whether the request could have had an effect.**
+   * *Nothing was sent:* `fetch.connect-failed` (the dial failed) is retried for **every** method.
+   * *The request may have been received:* a `429`, `502`, `503` or `504` answer, `fetch.timeout` and `fetch.response-truncated` are retried for
+     `get`, `head`, `put` and `delete` only (idempotent by RFC 9110), **never** for `post` or `patch`. A retried `post` can charge a card twice;
+     the caller who knows the endpoint is idempotent can retry it themselves.
+   * Never retried: any other status (a `404` or `500` is the answer), `fetch.tls`, `fetch.body-too-large`, `fetch.response-malformed`, every refusal
+     made before a socket opens.
+3. **The backoff is fixed: 250 ms, 500 ms, 1000 ms, 2000 ms, 4000 ms, with no jitter.** The tool's envelope is byte-identical whatever the
+   environment (§3.1), and a random delay would not be. The cost is that many callers retrying together retry together; the agent-per-process
+   use this tool is for makes that rare, and it is stated here rather than hidden.
+4. **`--timeout-ms` bounds everything:** the attempts and the waits between them, as it bounds a redirect chain. A wait is cut to what is left, and
+   if less than the next wait remains, retrying stops and the last answer (or refusal) is returned. So `--retry 5` never makes a call longer than
+   `--timeout-ms` (ceiling 60,000) and the claim that the call is bounded stays true.
+5. **The last answer is the answer.** A final `503` after all retries is returned as a `503` response with `attempts`, not turned into a refusal;
+   a final `fetch.connect-failed` is returned as that refusal with `detail.attempts`.
+6. **Replay is safe by construction:** the plan (request line, headers, the body already read from standard input) is borrowed by each attempt
+   and not consumed, so the same bytes go out each time. A credential is re-read per dial as today.
+7. **`Retry-After` is not honoured in v1.** It is shown in the headers already; parsing it (seconds or an HTTP date) and capping it by the deadline is
+   a later step, open below.
+
+Tests to write first: a server that answers `503` twice then `200` (three attempts, `attempts: 3`, gaps of about 250 and 500 ms between the server's
+arrival times); the same for `put` and `delete`; `post` and `patch` after a `503` are **not** retried (one request at the server); `404` is not
+retried; a closed port retried (`attempts` in the refusal) and, for `post`, retried too since nothing was sent; `--retry 5` against an
+always-`503` server with `--timeout-ms 700` returns the last `503` inside 900 ms; `--retry 6` is `args.bad-value`; the default sends one request;
+a `--body-stdin` body arrives whole on every attempt; the MCP schema carries `retry`.
+
+Open: honouring `Retry-After`; a per-host retry default baked at build time; whether `fetch.timeout` should be retried for `get` when the deadline is
+what ended it (it is not, by 4: nothing is left to retry in).
+
