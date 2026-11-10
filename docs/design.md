@@ -498,3 +498,80 @@ the hosts; it already did, in the row.)
 * **Schema**: `schemas/fetch.v1.json` lists the six methods (the response `method` enum also lacked `post`, which was already sent).
 * **Tests**: wire form of each verb (request line, `Content-Length`, `Content-Type`, no body for `delete`), an empty `put` body, `patch`
   from standard input, the refusals, and 302 not followed / 308 followed for each of the three with the method and body kept.
+
+## 8.11 Compressed responses (`--compressed`): design, not built
+
+Status: **design.** Written before the code, as the repository asks. What was read to write it (not run): `std/flate.cho` and `docs/flate.md` in
+cancho at 5a5dd1f, and `tools/fetch/fetchcore.cho` as it is after 8.10.
+
+**A correction.** The list of curl's features that fetch lacks said gzip "needs a cancho gzip package". It does not: `std.flate` has
+`gunzip(heap, src, limit)` (RFC 1952, CRC-32 and length checked), whose `limit` makes the decompressed size a bound the caller sets, and
+`docs/flate.md` says nothing in it traps on any input. The work is in fetch.
+
+Decisions **[choice]**, each to be held by a test before it is called built:
+
+1. **Opt-in, as curl's `--compressed`.** A flag `--compressed` sends `Accept-Encoding: gzip` and decodes a `Content-Encoding: gzip` body.
+   Without it nothing changes: `Accept-Encoding: identity`, and a body is returned as the server sent it. Reason: the existing behaviour
+   and its tests stay exactly as they are, and a caller that wants raw bytes (a checksum of the compressed file) keeps getting them.
+2. **The bound is on the decompressed size.** `--max-bytes` is checked twice: on the bytes read from the wire, as now, and as the `limit`
+   given to `gunzip`, so a small body that inflates past the cap (a decompression bomb) is `fetch.body-too-large`, with `detail.stage`
+   saying `decoded`. Memory is therefore at most about twice `--max-bytes` (the wire body and the decoded one, both held at once; the
+   ceiling is 16 MiB, so about 32 MiB at the largest) instead of one times it. **[measure]** at the build step, with the launcher
+   `scripts/maxrss.c`, and `bounded_memory` stays claimed only if the number holds.
+3. **Only `gzip`.** A `Content-Encoding` other than `gzip` or `identity` (`br`, `deflate`, `zstd`, a list) with `--compressed` is
+   `fetch.content-encoding-unsupported`, with the value in `detail`; the body is not returned undecoded, because a caller that asked for
+   `--compressed` would otherwise read compressed bytes as text. A list of codings (`gzip, br`) is refused the same way.
+4. **A body that does not decode is a refusal, not a partial answer.** A bad header, a failed CRC-32 or length, or a truncated stream is
+   `fetch.content-decoding`, with `std.flate`'s status in `detail.status`. `head`, `204`, `304` and a redirect that is followed have no body
+   to decode and are untouched.
+5. **The envelope says it happened.** A `decoded` field (`"gzip"` or `null`) is added to the `data` object and to `fetch.v1.json`;
+   `content-encoding` joins the headers that are shown, so a caller can see what the server sent. `body_bytes` is the decoded size.
+   `--format text` writes the decoded body.
+6. **No change to the authority row**: `std.flate` is pure and uses the heap, which the row already has.
+
+Tests to write first: a gzip body decoded and equal to the source; the same body without `--compressed` returned raw with
+`Accept-Encoding: identity`; a bomb (a few hundred bytes that inflate to more than `--max-bytes`) refused with `stage: decoded` and the memory
+measured; a corrupt CRC; a truncated stream; `br` refused; `--compressed` with `head`; a chunked gzip body; the same over https.
+
+Open: whether `--compressed` should also be a baked default per host (some APIs only answer compressed); not proposed here.
+
+## 8.12 Retries (`--retry N`): design, not built
+
+Status: **design.** One thing was measured to write it: the wait between attempts. cancho has no sleep builtin (`docs/atomics.md` §6 says a `Poller`
+wait with a timeout and no descriptors "might serve as a sleep; not tried"). Tried, with the compiler built from cancho 335bbe6: a function that
+creates a poller and calls `poller_wait(poller, events, 300)` with nothing registered returned 0 after **302 ms**, three runs of three, and needs only
+the `poll` label this tool's row already has. So no label is added to the authority row.
+
+Decisions **[choice]**, each to be held by a test before it is called built:
+
+1. **`--retry N`, 0 to 5, default 0.** With 0 nothing changes. The budget is shared by the whole request (all redirect hops), as
+   `--max-redirects` is, and is reported: `attempts` (an integer, 1 or more) joins the `data` object and `fetch.v1.json`.
+2. **What is retried, by whether the request could have had an effect.**
+   * *Nothing was sent:* `fetch.connect-failed` (the dial failed) is retried for **every** method.
+   * *The request may have been received:* a `429`, `502`, `503` or `504` answer, `fetch.timeout` and `fetch.response-truncated` are retried for
+     `get`, `head`, `put` and `delete` only (idempotent by RFC 9110), **never** for `post` or `patch`. A retried `post` can charge a card twice;
+     the caller who knows the endpoint is idempotent can retry it themselves.
+   * Never retried: any other status (a `404` or `500` is the answer), `fetch.tls`, `fetch.body-too-large`, `fetch.response-malformed`, every refusal
+     made before a socket opens.
+3. **The backoff is fixed: 250 ms, 500 ms, 1000 ms, 2000 ms, 4000 ms, with no jitter.** The tool's envelope is byte-identical whatever the
+   environment (§3.1), and a random delay would not be. The cost is that many callers retrying together retry together; the agent-per-process
+   use this tool is for makes that rare, and it is stated here rather than hidden.
+4. **`--timeout-ms` bounds everything:** the attempts and the waits between them, as it bounds a redirect chain. A wait is cut to what is left, and
+   if less than the next wait remains, retrying stops and the last answer (or refusal) is returned. So `--retry 5` never makes a call longer than
+   `--timeout-ms` (ceiling 60,000) and the claim that the call is bounded stays true.
+5. **The last answer is the answer.** A final `503` after all retries is returned as a `503` response with `attempts`, not turned into a refusal;
+   a final `fetch.connect-failed` is returned as that refusal with `detail.attempts`.
+6. **Replay is safe by construction:** the plan (request line, headers, the body already read from standard input) is borrowed by each attempt
+   and not consumed, so the same bytes go out each time. A credential is re-read per dial as today.
+7. **`Retry-After` is not honoured in v1.** It is shown in the headers already; parsing it (seconds or an HTTP date) and capping it by the deadline is
+   a later step, open below.
+
+Tests to write first: a server that answers `503` twice then `200` (three attempts, `attempts: 3`, gaps of about 250 and 500 ms between the server's
+arrival times); the same for `put` and `delete`; `post` and `patch` after a `503` are **not** retried (one request at the server); `404` is not
+retried; a closed port retried (`attempts` in the refusal) and, for `post`, retried too since nothing was sent; `--retry 5` against an
+always-`503` server with `--timeout-ms 700` returns the last `503` inside 900 ms; `--retry 6` is `args.bad-value`; the default sends one request;
+a `--body-stdin` body arrives whole on every attempt; the MCP schema carries `retry`.
+
+Open: honouring `Retry-After`; a per-host retry default baked at build time; whether `fetch.timeout` should be retried for `get` when the deadline is
+what ended it (it is not, by 4: nothing is left to retry in).
+
