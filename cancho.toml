@@ -9,27 +9,27 @@ cancho = "5a5dd1f21250b96b3f735a45b781489374219466"   # the compiler these sourc
 
 [dependencies.cli]
 git = "https://github.com/alpibrusl/cancho-tools"
-rev = "49a430e21d2b8148e764dbf4c2c32df245ac0522"
+rev = "6085e63a2bc6d91d2f91fa4d6eb72362c4944fe9"
 path = ".cancho-vcs/toolbox.cli"
 
 [dependencies.describe]
 git = "https://github.com/alpibrusl/cancho-tools"
-rev = "49a430e21d2b8148e764dbf4c2c32df245ac0522"
+rev = "6085e63a2bc6d91d2f91fa4d6eb72362c4944fe9"
 path = ".cancho-vcs/toolbox.describe"
 
 [dependencies.fail]
 git = "https://github.com/alpibrusl/cancho-tools"
-rev = "49a430e21d2b8148e764dbf4c2c32df245ac0522"
+rev = "6085e63a2bc6d91d2f91fa4d6eb72362c4944fe9"
 path = ".cancho-vcs/toolbox.fail"
 
 [dependencies.out]
 git = "https://github.com/alpibrusl/cancho-tools"
-rev = "49a430e21d2b8148e764dbf4c2c32df245ac0522"
+rev = "6085e63a2bc6d91d2f91fa4d6eb72362c4944fe9"
 path = ".cancho-vcs/toolbox.out"
 
 [dependencies.text]
 git = "https://github.com/alpibrusl/cancho-tools"
-rev = "49a430e21d2b8148e764dbf4c2c32df245ac0522"
+rev = "6085e63a2bc6d91d2f91fa4d6eb72362c4944fe9"
 path = ".cancho-vcs/toolbox.text"
 
 [dependencies.wire]
