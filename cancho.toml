@@ -1,6 +1,6 @@
 [package]
 name = "fetch"
-cancho = "5a5dd1f21250b96b3f735a45b781489374219466"   # the compiler these sources were written for (edition 11: Out and Ports)
+cancho = "0.1.1"   # the compiler release these sources are built with (CI installs it prebuilt)
 
 # `contract` is not a directory here: it is cancho-tools' package, one store per module, pinned to a commit, as in
 # cancho-table. `toolbox.built` is not in the package; it is this tool's own generated module (generated/fetch,
